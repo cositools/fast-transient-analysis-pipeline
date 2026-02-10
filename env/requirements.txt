@@ -1,0 +1,9 @@
+py7zr
+jupyter
+notebook
+numpy
+scipy
+pandas
+matplotlib
+psutil
+-e git+https://github.com/cositools/cosipy.git@v0.3.x#egg=cosipy
