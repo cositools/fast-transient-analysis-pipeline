@@ -1,0 +1,46 @@
+# fta-pipe.config.yaml
+# Configuration file for Fast Transient Analysis Pipeline module installation using 
+#    cosipy Python virtual environment
+# This file must be placed in the module root directory (same level as src/, env/, etc.)
+#
+# Usage examples:
+#   - Install with config: ./hot_load_module.sh <module> install
+#   - Override config: ./hot_load_module.sh <module> install -e -E env1,env2
+
+# ==============================================================================
+# Installation Options
+# ==============================================================================
+# install_mode: What to install when running 'install' command
+#   - "container": Only build Docker image (equivalent to -f flag)
+#   - "environment": Only create Python virtual environments (equivalent to -e flag)
+#   - "both": Build Docker image AND create environments (equivalent to -a flag)
+#   - "none": Skip installation (only link DAGs and pipeline)
+install_mode: both
+
+# ==============================================================================
+# Paths Configuration
+# ==============================================================================
+# All paths are relative to module root unless they start with /
+paths:
+  # Path to DAGs directory (default: src/dags)
+  dags: src/dags
+  
+  # Path to pipeline scripts directory (default: src/pipeline)
+  pipeline: src/pipeline
+  
+  # Path to Docker context directory containing Dockerfile (default: env)
+  images: env
+
+# ==============================================================================
+# Python Virtual Environments
+# ==============================================================================
+environments:
+  # Environment 1: Stable cosipy environment
+  cosipy:
+    requirements: env/requirements.txt
+    venv_path: /home/gamma/envs/cosipy
+    enabled: true
+    description: "Stable cosipy environment"
+  
+# Default environment to use if none specified
+default_environment: cosipy
