@@ -22,8 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ------------------------------ Non-root user ------------------------------
-ARG UID=501
-ARG GID=20
+ARG UID=
+ARG GID=
 
 # Create group and user with specific UID/GID
 RUN groupadd -g "${GID}" gamma || true && \
@@ -43,8 +43,8 @@ RUN python -m venv /home/gamma/envs/cosipy
 COPY --chown=gamma:gamma requirements.txt /home/gamma/requirements.txt
 # Activate env to install packages
 RUN . /home/gamma/envs/cosipy/bin/activate && \
-    pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r /home/gamma/requirements.txt
+    python -m pip install --upgrade pip && \
+    pip install -r /home/gamma/requirements.txt
 
 # ------------------------------ Default Configuration ------------------------------
 # Default to the stable environment

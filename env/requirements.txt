@@ -6,4 +6,5 @@ scipy
 pandas
 matplotlib
 psutil
+setuptools
 -e git+https://github.com/cositools/cosipy.git@v0.3.x#egg=cosipy
