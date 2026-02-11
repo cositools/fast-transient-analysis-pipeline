@@ -20,25 +20,25 @@ from datetime import timedelta
 # === Config ===
 # The image to use for scientific tasks (cosipy environment)
 # Ideally, this should be configurable via Variable or Env, but hardcoded for now as requested.
-# Using 'fastpipeline:latest' assuming it is built locally.
-CONTAINER_IMAGE = "fastpipeline:latest"
+# Using 'fast-transient-analysis-pipeline:latest' assuming it is built locally.
+CONTAINER_IMAGE = "fast-transient-analysis-pipeline:latest"
 
 # Scripts inside the container (mounted via modules_pool in the container, but here we assume the container has them or we mount them)
 # Wait, if we use DockerOperator, we are launching a NEW container. 
 # We need to make sure the code is available inside THAT container.
-# If 'fastpipeline' image contains the code in /app or similar, we use that path.
+# If 'fast-transient-analysis-pipeline' image contains the code in /app or similar, we use that path.
 # Assuming standard structure in image: /home/gamma/airflow/pipeline/... is NOT guaranteed unless we mount it.
-# However, user said "FastPipeline" module. 
+# However, user said "fast-transient-analysis-pipeline" module. 
 # Let's assume the image has the code or we mount the workspace.
 # For robustness, we mount the workspace into the DockerOperator container too.
 
 WORKSPACE_MOUNT = Mount(source="/Users/riccardofalco/cosi", target="/home/gamma/workspace", type="bind")
-# We also need the pipeline scripts. Assuming they are in the workspace under fastpipeline/src/pipeline
+# We also need the pipeline scripts. Assuming they are in the workspace under fast-transient-analysis-pipeline/src/pipeline
 # and mapped to /home/gamma/airflow/pipeline inside the container for consistency with previous scripts.
 # Or simpler: we execute the script from the mounted workspace directly.
 
-STAGE_SCRIPT = "/home/gamma/workspace/fastpipeline/src/pipeline/stage_files.py"
-BKG_CUT_SCRIPT = "/home/gamma/workspace/fastpipeline/src/pipeline/bkg_cut.py"
+STAGE_SCRIPT = "/home/gamma/workspace/fast-transient-analysis-pipeline/src/pipeline/stage_files.py"
+BKG_CUT_SCRIPT = "/home/gamma/workspace/fast-transient-analysis-pipeline/src/pipeline/bkg_cut.py"
 
 # === Paths ===
 RAW_ROOT = Path("/home/gamma/workspace/data/raw")
@@ -157,9 +157,9 @@ with DAG(
         auto_remove="success", # 'True' is deprecated/invalid in recent provider versions
         mount_tmp_dir=False,
         execution_timeout=timedelta(hours=2),
-        # Mount fastpipeline code and shared data only
+        # Mount fast-transient-analysis-pipeline code and shared data only
         mounts=[
-            Mount(source=f"{HOST_WORKSPACE_PATH}/fastpipeline", target="/home/gamma/workspace/fastpipeline", type="bind"),
+            Mount(source=f"{HOST_WORKSPACE_PATH}/fast-transient-analysis-pipeline", target="/home/gamma/workspace/fast-transient-analysis-pipeline", type="bind"),
             Mount(source=f"{HOST_WORKSPACE_PATH}/cosiflow/data", target="/home/gamma/workspace/data", type="bind"),
         ],
         command=[
@@ -187,7 +187,7 @@ with DAG(
         auto_remove="success",
         mount_tmp_dir=False,
         mounts=[
-            Mount(source=f"{HOST_WORKSPACE_PATH}/fastpipeline", target="/home/gamma/workspace/fastpipeline", type="bind"),
+            Mount(source=f"{HOST_WORKSPACE_PATH}/fast-transient-analysis-pipeline", target="/home/gamma/workspace/fast-transient-analysis-pipeline", type="bind"),
             Mount(source=f"{HOST_WORKSPACE_PATH}/cosiflow/data", target="/home/gamma/workspace/data", type="bind"),
         ],
         command=[

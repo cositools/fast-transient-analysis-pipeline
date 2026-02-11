@@ -8,20 +8,18 @@ from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 from airflow.models import Variable
 
-# To reset the DAG, delete the Variable:
-# airflow variables set COSIDAG_PROCESSED::cosidag_lcurve []
 
 def build_custom(dag):
 
     HOST_WORKSPACE_PATH = "/Users/riccardofalco/cosi"
-    CONTAINER_IMAGE = "fastpipeline:latest"
+    CONTAINER_IMAGE = "fast-transient-analysis-pipeline:latest"
     
     # Path to the script INSIDE the container
-    SCRIPT_PATH = "/home/gamma/workspace/fastpipeline/src/pipeline/lcurve/cosipipe_lc_ops_cosidag.py"
+    SCRIPT_PATH = "/home/gamma/workspace/fast-transient-analysis-pipeline/src/pipeline/ts_map/cosipipe_tsmap_ops_cosidag.py"
 
     # Common mounts
     MOUNTS = [
-        Mount(source=f"{HOST_WORKSPACE_PATH}/fastpipeline", target="/home/gamma/workspace/fastpipeline", type="bind"),
+        Mount(source=f"{HOST_WORKSPACE_PATH}/fast-transient-analysis-pipeline", target="/home/gamma/workspace/fast-transient-analysis-pipeline", type="bind"),
         Mount(source=f"{HOST_WORKSPACE_PATH}/cosiflow/data", target="/home/gamma/workspace/data", type="bind"),
     ]
 
@@ -44,7 +42,7 @@ def build_custom(dag):
         mount_tmp_dir=False,
         mounts=MOUNTS,
         command=[
-            "python", SCRIPT_PATH, "bin_grb_source",
+            "python", SCRIPT_PATH, "bin_grb_data",
             "--unbinned_file_path", GRB_FILE,
             "--data_folder", RUN_DIR
         ],
@@ -73,15 +71,15 @@ def build_custom(dag):
     GRB_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_grb_source', key='return_value') }}"
     BKG_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_background', key='return_value') }}"
 
-    plot_lightcurve = DockerOperator(
-        task_id="plot_lightcurve",
+    ts_map = DockerOperator(
+        task_id="ts_map_computation",
         image=CONTAINER_IMAGE,
         api_version='auto',
         auto_remove="success",
         mount_tmp_dir=False,
         mounts=MOUNTS,
         command=[
-            "python", SCRIPT_PATH, "plot_lightcurve_from_cells",
+            "python", SCRIPT_PATH, "compute_ts_map",
             "--grb_signal_path", GRB_BINNED_FILE,
             "--background_path", BKG_BINNED_FILE,
             "--orientation_path", ORI_FILE,
@@ -89,20 +87,44 @@ def build_custom(dag):
             "--data_folder", RUN_DIR
         ],
         network_mode="bridge",
+        # StatusCode 137 = OOM kill: TS map + 3ML need enough RAM (tune if still failing)
+        mem_limit="8g",
         do_xcom_push=True,
         dag=dag,
     )
 
-    # [bin_grb, bin_bkg] >> aggregate >> [plot_lightcurve]
-    [bin_grb, bin_bkg] >> plot_lightcurve
+    ts_map_mulres = DockerOperator(
+        task_id="ts_map_mulres_computation",
+        image=CONTAINER_IMAGE,
+        api_version='auto',
+        auto_remove="success",
+        mount_tmp_dir=False,
+        mounts=MOUNTS,
+        command=[
+            "python", SCRIPT_PATH, "compute_ts_map_mulres",
+            "--grb_signal_path", GRB_BINNED_FILE,
+            "--background_path", BKG_BINNED_FILE,
+            "--orientation_path", ORI_FILE,
+            "--response_path", RSP_FILE,
+            "--data_folder", RUN_DIR
+        ],
+        network_mode="bridge",
+        mem_limit="8g",
+        do_xcom_push=True,
+        dag=dag,
+    )
+
+    # [bin_grb, bin_bkg] >> aggregate >> [ts_map, ts_map_mulres]
+    bin_grb >> [ts_map, ts_map_mulres]
+    bin_bkg >> [ts_map, ts_map_mulres]
 
 
 with COSIDAG(
-    dag_id="cosidag_lcurve",
+    dag_id="cosidag_tsmap_dock",
     start_date=datetime(2025, 1, 1),
     schedule_interval=None,
     catchup=False,
-    monitoring_folders=["/home/gamma/workspace/data/lcurve"],
+    monitoring_folders=["/home/gamma/workspace/data/tsmap"],
     level=3,
     # Let the sensor accept only the deepest-level leaf (products)
     only_basename="products",
@@ -112,18 +134,17 @@ with COSIDAG(
     # ready_marker="_SUCCESS",   # enable if you create a sentinel at end-of-write
     # controlled parallelism:
     max_active_runs=2,         # up to 2 DAG runs in parallel
-    max_active_tasks=8,        # up to 8 tasks in parallel in the DAG
+    max_active_tasks=4,        # up to 8 tasks in parallel in the DAG
     concurrency=8,             # local alternative limit (Airflow <2.7)
     date_queries=f"=={datetime.now().strftime('%Y%m%d')}",
-    select_policy="latest_mtime",   # or "first"
     file_patterns={
         "grb_file": "GRB*_unbinned_*.fits*",
         "background_file": "Total_BG*_unbinned_*_window.fits*",
         "orientation_file": "*.ori",
         "response_file": "Response*.h5",
     },
-    auto_retrig=True,   # enable automatic retrigger
+    select_policy="latest_mtime",   # oppure "first"
     build_custom=build_custom,
-    tags=["cosidag", "lcurve"],
+    tags=["cosidag", "tsmap", "dock"]
 ) as dag:
     pass

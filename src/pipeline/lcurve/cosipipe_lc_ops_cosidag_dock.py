@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import sys
 import yaml
 
 # -----------------------------
@@ -259,6 +260,8 @@ def plot_lightcurve_from_cells(grb_signal_path: str,
     psr_map = create_psr(171.56, -4.780, ori_file=orientation_path, response_file=response_path)
     input_psr = psr_map.project(['Em', 'Phi', 'PsiChi']).contents.value
     mask_map = mask_from_cumdist_vectorized(input_psr, containment=0.5)
+    # Release PSR map memory after extracting mask
+    del psr_map, input_psr
 
     # ---- open histograms ----
     signal_full = Histogram.open(grb_signal_path)
@@ -281,6 +284,9 @@ def plot_lightcurve_from_cells(grb_signal_path: str,
     N = int(((window_stop.value + 20) - (window_start.value - 20)) / bin_size)
     bins = np.linspace(window_start.value - 20, window_stop.value + 20, N + 1)
 
+    # Release histogram memory before plotting
+    del signal_full, bkg_full
+    
     # ---- plot ----
     plt.figure(figsize=(10, 4))
     plt.step(bins, counts)
