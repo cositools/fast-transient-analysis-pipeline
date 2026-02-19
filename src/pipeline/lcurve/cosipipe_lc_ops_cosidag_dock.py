@@ -1,22 +1,29 @@
-# /home/gamma/airflow/dags/_lib/cosipipe_lc_ops.py
-# Utility functions used by the cosipipe_lightcurve DAG with ExternalPythonOperator.
-# All functions are self-contained and do not rely on DAG-level globals.
+"""
+Utility functions used by the cosipipe_lcurve DAG with DockerOperator.
+All functions are self-contained and do not rely on DAG-level globals.
+
+- bin_grb_source: bin the GRB data source based on the bin_grb.py script
+- bin_background_data: bin the background data based on the bin_bg.py script
+- plot_lightcurve_from_cells: plot the light curve based on the lightcurve.ipynb script
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 import os
-import sys
 import yaml
+import glob
 
-# -----------------------------
-# Binning (source & background)
-# -----------------------------
+# The following function is used to log messages to stderr so it doesn't interfere with XCom stdout
+# this avoid memory issues when using XCom to pass the logs of the container
 def log(msg):
     """Log message to stderr so it doesn't interfere with XCom stdout"""
     sys.stderr.write(str(msg) + "\n")
     sys.stderr.flush()
 
+# -----------------------------
+# Binning (source & background)
+# -----------------------------
 def bin_grb_source(unbinned_file_path: str, data_folder: str) -> str:
     """
     Bin GRB data source based on the bin_grb.py script
@@ -24,8 +31,10 @@ def bin_grb_source(unbinned_file_path: str, data_folder: str) -> str:
     log(f"[bin_grb_source] Found GRB unbinned fits file: {unbinned_file_path}")
 
     # Define output file path
-    extension = unbinned_file_path.split(".")[-1]
-    binned_file_name = unbinned_file_path.replace("_unbinned_", "_binned_").replace("."+extension, "")
+    # Extract basename first to avoid path issues
+    unbinned_basename = os.path.basename(unbinned_file_path)
+    extension = unbinned_basename.split(".")[-1]
+    binned_file_name = unbinned_basename.replace("_unbinned_", "_binned_").replace("."+extension, "")
     binned_file_path = os.path.join(data_folder, f"{binned_file_name}.hdf5")
     
     log(f"[bin_grb_source] Expected output file: {binned_file_path}")
@@ -79,21 +88,38 @@ def bin_grb_source(unbinned_file_path: str, data_folder: str) -> str:
     log(f"[bin_grb_source] Starting binning process for output: {binned_file_name}")
     log("[bin_grb_source] This may take several minutes depending on data size...")
     
-    analysis.get_binned_data(
-        unbinned_data=unbinned_file_path,
-        output_name=binned_file_name,
-        psichi_binning="galactic"
-    )
+    # Change to data_folder to ensure file is created in the correct location
+    original_cwd = os.getcwd()
+    try:
+        os.chdir(data_folder)
+        analysis.get_binned_data(
+            unbinned_data=unbinned_file_path,
+            output_name=binned_file_name,
+            psichi_binning="galactic"
+        )
+    finally:
+        os.chdir(original_cwd)
     
     log(f"[bin_grb_source] GRB data binning completed successfully!")
-    log(f"[bin_grb_source] Output file created: {binned_file_path}")
     
     # Verify the output file was created
     if os.path.exists(binned_file_path):
         file_size = os.path.getsize(binned_file_path) / (1024 * 1024)  # Size in MB
         log(f"[bin_grb_source] Output file verified: {file_size:.2f} MB")
     else:
+        # Try to find the file - it might have been created with a different path or name
         log(f"[bin_grb_source] Warning: Expected output file not found: {binned_file_path}")
+        # Search for .hdf5 files in data_folder that match the pattern
+        pattern = os.path.join(data_folder, f"*{binned_file_name}*.hdf5")
+        matches = glob.glob(pattern)
+        if matches:
+            log(f"[bin_grb_source] Found file at alternative location: {matches[0]}")
+            binned_file_path = matches[0]
+        else:
+            # List all .hdf5 files in data_folder for debugging
+            all_hdf5 = glob.glob(os.path.join(data_folder, "*.hdf5"))
+            log(f"[bin_grb_source] Available .hdf5 files in {data_folder}: {all_hdf5}")
+            raise FileNotFoundError(f"Binned GRB file not found at expected location: {binned_file_path}")
     
     return binned_file_path
 
@@ -105,9 +131,11 @@ def bin_background_data(unbinned_file_path: str, data_folder: str) -> str:
     log(f"[bin_background_data] Found background unbinned fits file: {unbinned_file_path}")
 
     # Define output file path
-    extension = unbinned_file_path.split(".")[-1]
+    # Extract basename first to avoid path issues
+    unbinned_basename = os.path.basename(unbinned_file_path)
+    extension = unbinned_basename.split(".")[-1]
     log(f"[bin_background_data] Extension: {extension}")
-    binned_file_name = unbinned_file_path.replace("_unbinned_", "_binned_").replace("."+extension, "")
+    binned_file_name = unbinned_basename.replace("_unbinned_", "_binned_").replace("."+extension, "")
     log(f"[bin_background_data] Binned file name: {binned_file_name}")
     binned_file_path = os.path.join(data_folder, f"{binned_file_name}.hdf5")
     
@@ -161,22 +189,39 @@ def bin_background_data(unbinned_file_path: str, data_folder: str) -> str:
     log(f"[bin_background_data] Starting binning process for output: {binned_file_name}")
     log("[bin_background_data] This may take several minutes depending on data size...")
     
-    analysis.get_binned_data(
-        unbinned_data=unbinned_file_path,
-        # Use output_file without the extension
-        output_name=binned_file_name,
-        psichi_binning="local"
-    )
+    # Change to data_folder to ensure file is created in the correct location
+    original_cwd = os.getcwd()
+    try:
+        os.chdir(data_folder)
+        analysis.get_binned_data(
+            unbinned_data=unbinned_file_path,
+            # Use output_file without the extension
+            output_name=binned_file_name,
+            psichi_binning="galactic"
+        )
+    finally:
+        os.chdir(original_cwd)
     
     log(f"[bin_background_data] Background data binning completed successfully!")
-    log(f"[bin_background_data] Output file created: {binned_file_path}")
     
     # Verify the output file was created
     if os.path.exists(binned_file_path):
         file_size = os.path.getsize(binned_file_path) / (1024 * 1024)  # Size in MB
         log(f"[bin_background_data] ✓ Output file verified: {file_size:.2f} MB")
     else:
+        # Try to find the file - it might have been created with a different path or name
         log(f"[bin_background_data] Warning: Expected output file not found: {binned_file_path}")
+        # Search for .hdf5 files in data_folder that match the pattern
+        pattern = os.path.join(data_folder, f"*{binned_file_name}*.hdf5")
+        matches = glob.glob(pattern)
+        if matches:
+            log(f"[bin_background_data] Found file at alternative location: {matches[0]}")
+            binned_file_path = matches[0]
+        else:
+            # List all .hdf5 files in data_folder for debugging
+            all_hdf5 = glob.glob(os.path.join(data_folder, "*.hdf5"))
+            log(f"[bin_background_data] Available .hdf5 files in {data_folder}: {all_hdf5}")
+            raise FileNotFoundError(f"Binned background file not found at expected location: {binned_file_path}")
     
     return binned_file_path
 
@@ -256,12 +301,12 @@ def plot_lightcurve_from_cells(grb_signal_path: str,
             data = bkg
         return data, data.contents.todense()
 
+    log(f"Opening histograms for GRB signal file: {grb_signal_path} and background file: {background_path}")
+    log(f"Building PSR + mask for orientation file: {orientation_path} and response file: {response_path}")
     # ---- build PSR + mask ----
     psr_map = create_psr(171.56, -4.780, ori_file=orientation_path, response_file=response_path)
     input_psr = psr_map.project(['Em', 'Phi', 'PsiChi']).contents.value
     mask_map = mask_from_cumdist_vectorized(input_psr, containment=0.5)
-    # Release PSR map memory after extracting mask
-    del psr_map, input_psr
 
     # ---- open histograms ----
     signal_full = Histogram.open(grb_signal_path)
@@ -284,9 +329,6 @@ def plot_lightcurve_from_cells(grb_signal_path: str,
     N = int(((window_stop.value + 20) - (window_start.value - 20)) / bin_size)
     bins = np.linspace(window_start.value - 20, window_stop.value + 20, N + 1)
 
-    # Release histogram memory before plotting
-    del signal_full, bkg_full
-    
     # ---- plot ----
     plt.figure(figsize=(10, 4))
     plt.step(bins, counts)
@@ -303,53 +345,53 @@ def plot_lightcurve_from_cells(grb_signal_path: str,
 
     return str(out_png)
 
+
 if __name__ == "__main__":
-    import argparse
     import sys
+    import argparse
     
-    parser = argparse.ArgumentParser(description="COSI Lightcurve Pipeline Operations")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(description="COSI lightcurve pipeline operations")
+    subparsers = parser.add_subparsers(dest='command', help='Command to execute')
     
-    # bin_grb_source
-    p_bin_grb = subparsers.add_parser("bin_grb_source")
-    p_bin_grb.add_argument("--unbinned_file_path", required=True)
-    p_bin_grb.add_argument("--data_folder", required=True)
+    # bin_grb_source command
+    parser_bin_grb = subparsers.add_parser('bin_grb_source', help='Bin GRB source data')
+    parser_bin_grb.add_argument('--unbinned_file_path', required=True, help='Path to unbinned GRB file')
+    parser_bin_grb.add_argument('--data_folder', required=True, help='Data folder for output')
     
-    # bin_background_data
-    p_bin_bkg = subparsers.add_parser("bin_background_data")
-    p_bin_bkg.add_argument("--unbinned_file_path", required=True)
-    p_bin_bkg.add_argument("--data_folder", required=True)
+    # bin_background_data command
+    parser_bin_bkg = subparsers.add_parser('bin_background_data', help='Bin background data')
+    parser_bin_bkg.add_argument('--unbinned_file_path', required=True, help='Path to unbinned background file')
+    parser_bin_bkg.add_argument('--data_folder', required=True, help='Data folder for output')
     
-    # plot_lightcurve_from_cells
-    p_lc = subparsers.add_parser("plot_lightcurve_from_cells")
-    p_lc.add_argument("--grb_signal_path", required=True)
-    p_lc.add_argument("--background_path", required=True)
-    p_lc.add_argument("--orientation_path", required=True)
-    p_lc.add_argument("--response_path", required=True)
-    p_lc.add_argument("--data_folder", required=True)
+    # plot_lightcurve_from_cells command
+    parser_plot = subparsers.add_parser('plot_lightcurve_from_cells', help='Plot lightcurve from cells')
+    parser_plot.add_argument('--grb_signal_path', required=True, help='Path to GRB signal file')
+    parser_plot.add_argument('--background_path', required=True, help='Path to background file')
+    parser_plot.add_argument('--orientation_path', required=True, help='Path to orientation file')
+    parser_plot.add_argument('--response_path', required=True, help='Path to response file')
+    parser_plot.add_argument('--data_folder', required=True, help='Data folder for output')
     
     args = parser.parse_args()
     
-    # Redirect stdout to stderr to capture logs in Airflow logs, 
-    # and only print the return value to stdout for XCom
-    # original_stdout = sys.stdout
-    # sys.stdout = sys.stderr
-    
-    try:
-        result = None
-        if args.command == "bin_grb_source":
-            result = bin_grb_source(args.unbinned_file_path, args.data_folder)
-        elif args.command == "bin_background_data":
-            result = bin_background_data(args.unbinned_file_path, args.data_folder)
-        elif args.command == "plot_lightcurve_from_cells":
-            result = plot_lightcurve_from_cells(args.grb_signal_path, args.background_path, args.orientation_path, args.response_path, args.data_folder)
-            
-        # Print result to original stdout
-        # sys.stdout = original_stdout
-        if result:
-            print(result)
-            
-    except Exception as e:
-        # sys.stdout = original_stdout
-        # Re-raise to fail the task
-        raise e
+    if args.command == 'bin_grb_source':
+        result = bin_grb_source(args.unbinned_file_path, args.data_folder)
+        print(result)
+        sys.exit(0)
+    elif args.command == 'bin_background_data':
+        result = bin_background_data(args.unbinned_file_path, args.data_folder)
+        print(result)
+        sys.exit(0)
+    elif args.command == 'plot_lightcurve_from_cells':
+        result = plot_lightcurve_from_cells(
+            grb_signal_path=args.grb_signal_path,
+            background_path=args.background_path,
+            orientation_path=args.orientation_path,
+            response_path=args.response_path,
+            data_dir=args.data_folder  # Function uses data_dir, argparse uses data_folder
+        )
+        print(result)
+        sys.exit(0)
+    else:
+        parser.print_help()
+        sys.exit(1)
+

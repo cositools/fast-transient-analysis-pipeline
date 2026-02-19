@@ -1,5 +1,5 @@
 from datetime import datetime
-import sys
+import os, sys
 sys.path.append("/home/gamma/airflow/modules")
 
 from cosidag import COSIDAG
@@ -13,13 +13,29 @@ from airflow.models import Variable
 
 def build_custom(dag):
 
-    HOST_WORKSPACE_PATH = "/Users/riccardofalco/cosi"
+    # Host workspace path: must exist on the Docker daemon host (docker-proxy)
+    # Provided by docker-compose as an env var (recommended), or via Airflow Variable as override.
+    # NOTE: this must be a path on the Docker *daemon* host, not inside the Airflow container.
+    # Example:
+    #   airflow variables set COSIDAG_DOCKER_HOST_WORKSPACE_PATH /opt/cosi
+    #   (or export HOST_WORKSPACE_PATH=/opt/cosi in docker-compose)
+    try:
+        HOST_WORKSPACE_PATH = Variable.get("COSIDAG_DOCKER_HOST_WORKSPACE_PATH", default_var=None)
+    except Exception:
+        HOST_WORKSPACE_PATH = None
+    if not HOST_WORKSPACE_PATH:
+        HOST_WORKSPACE_PATH = os.getenv("HOST_WORKSPACE_PATH")
+    if not HOST_WORKSPACE_PATH:
+        raise ValueError(
+            "HOST_WORKSPACE_PATH is not set. Set env var HOST_WORKSPACE_PATH in docker-compose "
+            "or Airflow Variable COSIDAG_DOCKER_HOST_WORKSPACE_PATH."
+        )
     CONTAINER_IMAGE = "fast-transient-analysis-pipeline:latest"
     
-    # Path to the script INSIDE the container
-    SCRIPT_PATH = "/home/gamma/workspace/fast-transient-analysis-pipeline/src/pipeline/lcurve/cosipipe_lc_ops_cosidag.py"
+    # Path to the script INSIDE the container (after mount at /home/gamma/workspace/fast-transient-analysis-pipeline)
+    SCRIPT_PATH = "/home/gamma/workspace/fast-transient-analysis-pipeline/src/pipeline/lcurve/cosipipe_lc_ops_cosidag_dock.py"
 
-    # Common mounts
+    # Common mounts (source paths must exist on docker-proxy host where Docker daemon runs)
     MOUNTS = [
         Mount(source=f"{HOST_WORKSPACE_PATH}/fast-transient-analysis-pipeline", target="/home/gamma/workspace/fast-transient-analysis-pipeline", type="bind"),
         Mount(source=f"{HOST_WORKSPACE_PATH}/cosiflow/data", target="/home/gamma/workspace/data", type="bind"),
@@ -49,7 +65,10 @@ def build_custom(dag):
             "--data_folder", RUN_DIR
         ],
         network_mode="bridge",
+        # xcom push all the logs of the container
         do_xcom_push=True,
+        # In Airflow 3.0, do_xcom_push is deprecated and replaced by xcom_all=False
+        xcom_all=False,
         dag=dag,
     )
 
@@ -66,12 +85,17 @@ def build_custom(dag):
             "--data_folder", RUN_DIR
         ],
         network_mode="bridge",
+        # xcom push all the logs of the container
         do_xcom_push=True,
+        # In Airflow 3.0, do_xcom_push is deprecated and replaced by xcom_all=False
+        xcom_all=False,
         dag=dag,
     )
 
     GRB_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_grb_source', key='return_value') }}"
+    # GRB_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_grb_source', key='return_value').split('\n')[-1] if ti.xcom_pull(task_ids='bin_grb_source', key='return_value') else '' }}"
     BKG_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_background', key='return_value') }}"
+    # BKG_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_background', key='return_value').split('\n')[-1] if ti.xcom_pull(task_ids='bin_background', key='return_value') else '' }}"
 
     plot_lightcurve = DockerOperator(
         task_id="plot_lightcurve",
@@ -89,7 +113,7 @@ def build_custom(dag):
             "--data_folder", RUN_DIR
         ],
         network_mode="bridge",
-        do_xcom_push=True,
+        do_xcom_push=False,
         dag=dag,
     )
 

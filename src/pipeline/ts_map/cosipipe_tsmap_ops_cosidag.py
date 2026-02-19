@@ -1,16 +1,18 @@
 """
-Utility functions used by the cosipipe_tsmap DAG with ExternalPythonOperator.
+Utility functions used by the cosipipe_tsmap DAG with DockerOperator.
 All functions are self-contained and do not rely on DAG-level globals.
 
-- bin_grb_data: bin the GRB data source based on the bin_grb.py script
+- bin_grb_source: bin the GRB data source based on the bin_grb.py script
 - bin_background_data: bin the background data based on the bin_bg.py script
 - compute_ts_map: compute the TS map based on the ts_map.py script
-- compute_ts_map_mulres: compute the TS map based on the ts_map_mulres.py script
+- compute_ts_map_mulres: compute the TS map with multiple resolutions based on the ts_map_mulres.py script
 """
 from __future__ import annotations
 
 import os
 from pathlib import Path
+import time
+import threading
 
 # =====================================================================
 # =============== Inlined pipeline step implementations ===============
@@ -23,6 +25,16 @@ import sys
 import yaml
 from pathlib import Path
 
+# The following function is used to print a heartbeat message every 60s to keep connection alive.
+# This is used to avoid the container being killed by the scheduler due to inactivity.
+def heartbeat(stop_event, msg):
+    """Prints a heartbeat message every 60s to keep connection alive."""
+    while not stop_event.is_set():
+        print(f"[heartbeat] {msg} - Still working...", flush=True, file=sys.stderr)
+        time.sleep(60)
+
+# The following function is used to log messages to stderr so it doesn't interfere with XCom stdout
+# this avoid memory issues when using XCom to pass the logs of the container
 def log(msg):
     """Log message to stderr so it doesn't interfere with XCom stdout"""
     sys.stderr.write(str(msg) + "\n")
@@ -290,14 +302,20 @@ def compute_ts_map(grb_signal_path: str,
     spectrum.piv.value = piv.value 
     spectrum.K.unit = K.unit
     spectrum.piv.unit = piv.unit
+
+    # Start the heartbeat thread
+    stop_event = threading.Event()
+    t = threading.Thread(target=heartbeat, args=(stop_event, "compute_ts_map"))
+    t.start()
     
     # Generate TS map plots
     try:
+        cpu_cores = int(os.getenv("TSMAP_CPU_CORES", "8"))
         ts_results = ts.parallel_ts_fit(hypothesis_coords=hypothesis_coords, 
                                         energy_channel = [2,3], 
                                         spectrum=spectrum, 
                                         ts_scheme="RING", 
-                                        cpu_cores=56)
+                                        cpu_cores=cpu_cores)
         # plots the raw TS values, which is also an image of the GRB. However, 
         # for the purpose of localization, we are more interested in the confidence 
         # level of the imaged GRB. Thus, you can plot the 90% containment level of 
@@ -315,6 +333,10 @@ def compute_ts_map(grb_signal_path: str,
     except Exception as e:
         log(f"[compute_ts_map] Error during TS map computation: {str(e)}")
         raise e
+    finally:
+        stop_event.set()
+        t.join()
+        print(f"[compute_ts_map] Finished TS map computation", flush=True, file=sys.stderr)
 
 
 # ---[ from 4_tsmapmulres_computation.py ]---
@@ -471,8 +493,8 @@ if __name__ == "__main__":
     
     # Redirect stdout to stderr to capture logs in Airflow logs, 
     # and only print the return value to stdout for XCom
-    # original_stdout = sys.stdout
-    # sys.stdout = sys.stderr
+    original_stdout = sys.stdout
+    sys.stdout = sys.stderr
     
     try:
         result = None
@@ -485,12 +507,12 @@ if __name__ == "__main__":
         elif args.command == "compute_ts_map_mulres":
             result = compute_ts_map_mulres(args.grb_signal_path, args.background_path, args.orientation_path, args.response_path, args.data_folder)
             
-        # Print result to original stdout
-        # sys.stdout = original_stdout
+        # Print result to original stdout (for XCom)
+        sys.stdout = original_stdout
         if result:
             print(result)
             
     except Exception as e:
-        # sys.stdout = original_stdout
+        sys.stdout = original_stdout
         # Re-raise to fail the task
         raise e

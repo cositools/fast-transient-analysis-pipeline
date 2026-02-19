@@ -1,5 +1,5 @@
 from datetime import datetime
-import sys
+import os, sys
 sys.path.append("/home/gamma/airflow/modules")
 
 from cosidag import COSIDAG
@@ -11,7 +11,7 @@ from airflow.models import Variable
 
 def build_custom(dag):
 
-    HOST_WORKSPACE_PATH = "/Users/riccardofalco/cosi"
+    HOST_WORKSPACE_PATH = os.getenv("HOST_WORKSPACE_PATH")
     CONTAINER_IMAGE = "fast-transient-analysis-pipeline:latest"
     
     # Path to the script INSIDE the container
@@ -48,6 +48,7 @@ def build_custom(dag):
         ],
         network_mode="bridge",
         do_xcom_push=True,
+        xcom_all=False,
         dag=dag,
     )
 
@@ -65,11 +66,14 @@ def build_custom(dag):
         ],
         network_mode="bridge",
         do_xcom_push=True,
+        xcom_all=False,
         dag=dag,
     )
 
-    GRB_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_grb_source', key='return_value') }}"
-    BKG_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_background', key='return_value') }}"
+    # GRB_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_grb_source', key='return_value') }}"
+    GRB_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_grb_source', key='return_value').split('\n')[-1] if ti.xcom_pull(task_ids='bin_grb_source', key='return_value') else '' }}"
+    #BKG_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_background', key='return_value') }}"
+    BKG_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_background', key='return_value').split('\n')[-1] if ti.xcom_pull(task_ids='bin_background', key='return_value') else '' }}"
 
     ts_map = DockerOperator(
         task_id="ts_map_computation",
@@ -86,6 +90,12 @@ def build_custom(dag):
             "--response_path", RSP_FILE,
             "--data_folder", RUN_DIR
         ],
+        environment={
+            "TSMAP_CPU_CORES": "8",
+            "OMP_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+        },
         network_mode="bridge",
         # StatusCode 137 = OOM kill: TS map + 3ML need enough RAM (tune if still failing)
         mem_limit="8g",
@@ -108,6 +118,12 @@ def build_custom(dag):
             "--response_path", RSP_FILE,
             "--data_folder", RUN_DIR
         ],
+        environment={
+            "TSMAP_CPU_CORES": "8",
+            "OMP_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+            },
         network_mode="bridge",
         mem_limit="8g",
         do_xcom_push=True,
