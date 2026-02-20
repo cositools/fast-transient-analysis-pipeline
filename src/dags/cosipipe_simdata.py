@@ -32,7 +32,6 @@ CONTAINER_IMAGE = "fast-transient-analysis-pipeline:latest"
 # Let's assume the image has the code or we mount the workspace.
 # For robustness, we mount the workspace into the DockerOperator container too.
 
-WORKSPACE_MOUNT = Mount(source="/Users/riccardofalco/cosi", target="/home/gamma/workspace", type="bind")
 # We also need the pipeline scripts. Assuming they are in the workspace under fast-transient-analysis-pipeline/src/pipeline
 # and mapped to /home/gamma/airflow/pipeline inside the container for consistency with previous scripts.
 # Or simpler: we execute the script from the mounted workspace directly.
@@ -145,10 +144,12 @@ with DAG(
     # HOWEVER, if we share the same volume mounts as the airflow container, we can use 'volumes' in DockerOperator
     # referring to the named volume or host path.
     #
-    # The user environment seems to have workspace at /Users/riccardofalco/cosi
-    # We hardcode the mount for now based on the user workspace info provided.
-    
-    HOST_WORKSPACE_PATH = "/Users/riccardofalco/cosi"
+    # The workspace path on the host machine
+    # This should match the actual host path where the cosi directory is located
+    HOST_WORKSPACE_PATH = os.getenv("HOST_WORKSPACE_PATH")
+    if not HOST_WORKSPACE_PATH:
+        raise ValueError("HOST_WORKSPACE_PATH is not set. "
+        "Set env var HOST_WORKSPACE_PATH in docker-compose or Airflow Variable COSIDAG_DOCKER_HOST_WORKSPACE_PATH.")
 
     t_stage = DockerOperator(
         task_id="stage_all_files",
