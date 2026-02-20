@@ -17,7 +17,7 @@ from airflow.models import Variable
 def build_custom(dag):
 
     EXTERNAL_PYTHON = cfg("EXTERNAL_PYTHON", "/home/gamma/envs/cosipy/bin/python")
-    LIB_DIR = cfg("TSMAP_LIB_DIR", "/home/gamma/airflow/pipeline/fast-transient-analysis-pipeline.cfmodule/lcurve")
+    LIB_DIR = cfg("LCURVE_LIB_DIR", "/home/gamma/airflow/pipeline/fast-transient-analysis-pipeline.cfmodule/lcurve")
 
     # ----- Python callables executed in the external interpreter -----
     def _bin_grb(run_dir: str, lib_dir: str, grb_file: str) -> str:
