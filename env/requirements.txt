@@ -6,5 +6,5 @@ scipy
 pandas
 matplotlib
 psutil
-setuptools
+setuptools<65.0.0  # Versione che include ancora pkg_resources (richiesto da threeML)
 -e git+https://github.com/cositools/cosipy.git@v0.3.x#egg=cosipy
