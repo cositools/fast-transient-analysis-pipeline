@@ -10,8 +10,13 @@ from airflow.models import Variable
 
 
 def build_custom(dag):
-
+    # The workspace path on the host machine
+    # This should match the actual host path where the cosi directory is located
     HOST_WORKSPACE_PATH = os.getenv("HOST_WORKSPACE_PATH")
+    if not HOST_WORKSPACE_PATH:
+        raise ValueError("HOST_WORKSPACE_PATH is not set. "
+        "Set env var HOST_WORKSPACE_PATH in docker-compose or Airflow Variable COSIDAG_DOCKER_HOST_WORKSPACE_PATH.")
+    
     CONTAINER_IMAGE = "fast-transient-analysis-pipeline:latest"
     
     # Path to the script INSIDE the container
@@ -70,10 +75,10 @@ def build_custom(dag):
         dag=dag,
     )
 
-    # GRB_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_grb_source', key='return_value') }}"
-    GRB_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_grb_source', key='return_value').split('\n')[-1] if ti.xcom_pull(task_ids='bin_grb_source', key='return_value') else '' }}"
-    #BKG_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_background', key='return_value') }}"
-    BKG_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_background', key='return_value').split('\n')[-1] if ti.xcom_pull(task_ids='bin_background', key='return_value') else '' }}"
+    GRB_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_grb_source', key='return_value') }}"
+    # GRB_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_grb_source', key='return_value').split('\n')[-1] if ti.xcom_pull(task_ids='bin_grb_source', key='return_value') else '' }}"
+    BKG_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_background', key='return_value') }}"
+    # BKG_BINNED_FILE = "{{ ti.xcom_pull(task_ids='bin_background', key='return_value').split('\n')[-1] if ti.xcom_pull(task_ids='bin_background', key='return_value') else '' }}"
 
     ts_map = DockerOperator(
         task_id="ts_map_computation",

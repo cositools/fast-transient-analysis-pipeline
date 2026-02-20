@@ -5,6 +5,20 @@ All functions are self-contained and do not rely on DAG-level globals.
 - bin_grb_source: bin the GRB data source based on the bin_grb.py script
 - bin_background_data: bin the background data based on the bin_bg.py script
 - plot_lightcurve_from_cells: plot the light curve based on the lightcurve.ipynb script
+
+# LOGGING APPROACH
+In this file, we use the following approach to pass the logs of the container to Airflow:
+- Redirect stdout to stderr to capture logs in Airflow logs, 
+- and only print the return value to stdout for XCom
+This is necessary to avoid memory issues when using XCom to pass the logs of the container.
+Since the container is running in a separate process, the stdout of the container is not captured by Airflow.
+So we redirect the stdout to stderr to capture the logs in Airflow logs,
+and only print the return value to stdout for XCom.
+
+# HEARTBEAT APPROACH
+In this file, we use the following approach to keep the container alive:
+- Print a heartbeat message every 60s to keep connection alive.
+This is used to avoid the container being killed by the scheduler due to inactivity.
 """
 
 from __future__ import annotations
@@ -372,26 +386,34 @@ if __name__ == "__main__":
     parser_plot.add_argument('--data_folder', required=True, help='Data folder for output')
     
     args = parser.parse_args()
-    
-    if args.command == 'bin_grb_source':
-        result = bin_grb_source(args.unbinned_file_path, args.data_folder)
-        print(result)
-        sys.exit(0)
-    elif args.command == 'bin_background_data':
-        result = bin_background_data(args.unbinned_file_path, args.data_folder)
-        print(result)
-        sys.exit(0)
-    elif args.command == 'plot_lightcurve_from_cells':
-        result = plot_lightcurve_from_cells(
-            grb_signal_path=args.grb_signal_path,
-            background_path=args.background_path,
-            orientation_path=args.orientation_path,
-            response_path=args.response_path,
-            data_dir=args.data_folder  # Function uses data_dir, argparse uses data_folder
-        )
-        print(result)
-        sys.exit(0)
-    else:
-        parser.print_help()
-        sys.exit(1)
 
+    # Redirect stdout to stderr to capture logs in Airflow logs, 
+    # and only print the return value to stdout for XCom
+    original_stdout = sys.stdout
+    sys.stdout = sys.stderr
+    
+    try:
+        if args.command == 'bin_grb_source':
+            result = bin_grb_source(args.unbinned_file_path, args.data_folder)
+        elif args.command == 'bin_background_data':
+            result = bin_background_data(args.unbinned_file_path, args.data_folder)
+        elif args.command == 'plot_lightcurve_from_cells':
+            result = plot_lightcurve_from_cells(
+                grb_signal_path=args.grb_signal_path,
+                background_path=args.background_path,
+                orientation_path=args.orientation_path,
+                response_path=args.response_path,
+                data_dir=args.data_folder  # Function uses data_dir, argparse uses data_folder
+            )
+        else:
+            parser.print_help()
+        
+        # Print result to original stdout (for XCom)
+        sys.stdout = original_stdout
+        if result:
+            print(result)
+        
+    except Exception as e:
+        sys.stdout = original_stdout
+        # Re-raise to fail the task
+        raise e

@@ -13,23 +13,13 @@ from airflow.models import Variable
 
 def build_custom(dag):
 
-    # Host workspace path: must exist on the Docker daemon host (docker-proxy)
-    # Provided by docker-compose as an env var (recommended), or via Airflow Variable as override.
-    # NOTE: this must be a path on the Docker *daemon* host, not inside the Airflow container.
-    # Example:
-    #   airflow variables set COSIDAG_DOCKER_HOST_WORKSPACE_PATH /opt/cosi
-    #   (or export HOST_WORKSPACE_PATH=/opt/cosi in docker-compose)
-    try:
-        HOST_WORKSPACE_PATH = Variable.get("COSIDAG_DOCKER_HOST_WORKSPACE_PATH", default_var=None)
-    except Exception:
-        HOST_WORKSPACE_PATH = None
+    # The workspace path on the host machine
+    # This should match the actual host path where the cosi directory is located
+    HOST_WORKSPACE_PATH = os.getenv("HOST_WORKSPACE_PATH")
     if not HOST_WORKSPACE_PATH:
-        HOST_WORKSPACE_PATH = os.getenv("HOST_WORKSPACE_PATH")
-    if not HOST_WORKSPACE_PATH:
-        raise ValueError(
-            "HOST_WORKSPACE_PATH is not set. Set env var HOST_WORKSPACE_PATH in docker-compose "
-            "or Airflow Variable COSIDAG_DOCKER_HOST_WORKSPACE_PATH."
-        )
+        raise ValueError("HOST_WORKSPACE_PATH is not set. "
+        "Set env var HOST_WORKSPACE_PATH in docker-compose or Airflow Variable COSIDAG_DOCKER_HOST_WORKSPACE_PATH.")
+    
     CONTAINER_IMAGE = "fast-transient-analysis-pipeline:latest"
     
     # Path to the script INSIDE the container (after mount at /home/gamma/workspace/fast-transient-analysis-pipeline)

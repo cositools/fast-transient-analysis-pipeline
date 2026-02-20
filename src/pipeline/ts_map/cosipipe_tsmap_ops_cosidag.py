@@ -6,6 +6,20 @@ All functions are self-contained and do not rely on DAG-level globals.
 - bin_background_data: bin the background data based on the bin_bg.py script
 - compute_ts_map: compute the TS map based on the ts_map.py script
 - compute_ts_map_mulres: compute the TS map with multiple resolutions based on the ts_map_mulres.py script
+
+# LOGGING APPROACH
+In this file, we use the following approach to pass the logs of the container to Airflow:
+- Redirect stdout to stderr to capture logs in Airflow logs, 
+- and only print the return value to stdout for XCom
+This is necessary to avoid memory issues when using XCom to pass the logs of the container.
+Since the container is running in a separate process, the stdout of the container is not captured by Airflow.
+So we redirect the stdout to stderr to capture the logs in Airflow logs,
+and only print the return value to stdout for XCom.
+
+# HEARTBEAT APPROACH
+In this file, we use the following approach to keep the container alive:
+- Print a heartbeat message every 60s to keep connection alive.
+This is used to avoid the container being killed by the scheduler due to inactivity.
 """
 from __future__ import annotations
 
