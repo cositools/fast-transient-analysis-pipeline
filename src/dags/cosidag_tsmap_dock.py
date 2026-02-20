@@ -20,7 +20,7 @@ def build_custom(dag):
     CONTAINER_IMAGE = "fast-transient-analysis-pipeline:latest"
     
     # Path to the script INSIDE the container
-    SCRIPT_PATH = "/home/gamma/workspace/fast-transient-analysis-pipeline/src/pipeline/ts_map/cosipipe_tsmap_ops_cosidag.py"
+    SCRIPT_PATH = "/home/gamma/workspace/fast-transient-analysis-pipeline/src/pipeline/ts_map/cosipipe_tsmap_ops_cosidag_dock.py"
 
     # Common mounts
     MOUNTS = [

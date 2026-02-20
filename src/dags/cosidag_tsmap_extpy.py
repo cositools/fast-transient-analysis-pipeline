@@ -17,34 +17,34 @@ from airflow.models import Variable
 def build_custom(dag):
 
     EXTERNAL_PYTHON = cfg("EXTERNAL_PYTHON", "/home/gamma/envs/cosipy/bin/python")
-    LIB_DIR = cfg("TSMAP_LIB_DIR", "/home/gamma/airflow/pipeline/ts_map")
+    LIB_DIR = cfg("TSMAP_LIB_DIR", "/home/gamma/airflow/pipeline/fast-transient-analysis-pipeline.cfmodule/ts_map")
 
     # ----- Python callables executed in the external interpreter -----
 
     def _bin_grb(run_dir: str, lib_dir: str, grb_file: str) -> str:
         import sys
         sys.path.insert(0, lib_dir)
-        from cosipipe_tsmap_ops_cosidag import bin_grb_data
+        from cosipipe_tsmap_ops_cosidag_extpy import bin_grb_data
         return bin_grb_data(grb_file, run_dir)
 
     def _bin_bkg(run_dir: str, lib_dir: str, background_file: str) -> str:
         import sys
         sys.path.insert(0, lib_dir)
-        from cosipipe_tsmap_ops_cosidag import bin_background_data
+        from cosipipe_tsmap_ops_cosidag_extpy import bin_background_data
         return bin_background_data(background_file, run_dir)
 
     def _ts_map(run_dir: str, lib_dir: str, grb_file: str, background_file: str, 
                 orientation_file: str, response_file: str) -> str:
         import sys
         sys.path.insert(0, lib_dir)
-        from cosipipe_tsmap_ops_cosidag import compute_ts_map
+        from cosipipe_tsmap_ops_cosidag_extpy import compute_ts_map
         return compute_ts_map(grb_file, background_file, orientation_file, response_file, run_dir)
 
     def _ts_map_mulres(run_dir: str, lib_dir: str, grb_file: str, background_file: str, 
                        orientation_file: str, response_file: str) -> str:
         import sys
         sys.path.insert(0, lib_dir)
-        from cosipipe_tsmap_ops_cosidag import compute_ts_map_mulres
+        from cosipipe_tsmap_ops_cosidag_extpy import compute_ts_map_mulres
         return compute_ts_map_mulres(grb_file, background_file, orientation_file, response_file, run_dir)
 
     # ----- Operators (IMPORTANT: pass dag=dag) -----
