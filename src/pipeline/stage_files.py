@@ -70,100 +70,54 @@ def redownload(remote_key: str, out_path: Path) -> None:
     fetch_wasabi(remote_key, out_path)
 
 def download_or_use_one(remote_or_local: str, target_dir: Path, *, kind: str) -> list[Path]:
+    """
+    Downloads or uses a file from Wasabi or local path.
+    Returns a list of paths to the files that were downloaded or used.
+    Parameters:
+        remote_or_local: The path to the file to download or use.
+        target_dir: The directory to download the file to.
+        kind: The kind of file to download or use.
+    Returns:
+        A list of paths to the files that were downloaded or used.
+    """
     # Ensure target directory exists
     ensure_dir(target_dir)
 
+    # print(f"[stage] Remote or local path: {remote_or_local}")
+    file_name = Path(remote_or_local).name
+    # check how many extensions are in the file name
+    extensions = file_name.split(".")[1:]
+    if len(extensions) > 1:
+        # remove the extensions from the file name
+        file_name = ".".join(file_name.split(".")[:-1])
+        # print(f"[stage] The file is zipped, filename is: {file_name}")
     # If ready files exist, return them
-    if ready_files_exist(target_dir):
-        files = ready_files(target_dir)
-        # If background files exist, validate them
-        if kind == "background":
-            # Find the background FITS file
-            bg_fits = next((p for p in files if p.suffix.lower() == ".fits" or p.name.endswith(".fits")), None)
-            if bg_fits and not validate_background_fits(bg_fits):
-                print(f"[stage] Detected corrupted ready background in {target_dir}, cleaning and re-fetching…", file=sys.stderr)
-                for p in target_dir.iterdir():
-                    if p.is_file():
-                        p.unlink(missing_ok=True)
-            # If background files are valid, return them
-            else:
-                print(f"[stage] Ready files already in {target_dir}, skipping.", file=sys.stderr)
-                return files
-        # If not background files, return them
-        else:
-            print(f"[stage] Ready files already in {target_dir}, skipping.", file=sys.stderr)
-            return files
+    if os.path.exists(target_dir / file_name):
+        # print(f"[stage] Ready file {file_name} already in {target_dir}, skipping.", file=sys.stderr)
+        return str(target_dir / file_name)
 
-    # If not ready files, download the file
+    # If not ready file exists, download the file
     src = Path(remote_or_local)
+    target_file = target_dir / file_name
+    fetch_wasabi(remote_or_local, target_file)
     
-    # If the file is absolute and exists, link it to the target directory
-    if src.is_absolute() and src.exists():
-        dst = target_dir / src.name
-        # If the link does not exist, create it
-        if not dst.exists():
-            # Try to link the file, if it fails, copy it
-            try:
-                os.link(src, dst)
-            except OSError:
-                shutil.copy2(src, dst)
-        # If the file is a gzip, gunzip it
-        if dst.suffix == ".gz":
-            ready = gunzip_to_same_dir(dst)
-            return [ready]
-        # If the file is a zip, extract it
-        if dst.suffix == ".zip":
-            try:
-                with zipfile.ZipFile(dst, "r") as zf:
-                    zf.testzip()
-                    zf.extractall(target_dir)
-                return ready_files(target_dir)
-            except BadZipFile as e:
-                raise RuntimeError(f"[stage] Local .zip seems corrupted: {dst} ({e})")
-        if kind == "background" and dst.suffix.lower() == ".fits" and not validate_background_fits(dst):
-            raise RuntimeError(f"[stage] Local background FITS seems corrupted: {dst}")
-        return [dst]
-
-    out_path = target_dir / src.name
-
-    if not out_path.exists():
-        fetch_wasabi(remote_or_local, out_path)
-
-    if out_path.suffix == ".gz":
+    # If the file is zipped, unzip it
+    if target_file.suffix == ".gz":
+        ready = gunzip_to_same_dir(target_file)
+        return str(ready)
+    # If the file is a zip, extract it
+    if target_file.suffix == ".zip":
         try:
-            ready = gunzip_to_same_dir(out_path)
-        except Exception:
-            print(f"[stage] Corrupted .gz at {out_path}, re-downloading…", file=sys.stderr)
-            redownload(remote_or_local, out_path)
-            ready = gunzip_to_same_dir(out_path)
-        if kind == "background" and not validate_background_fits(ready):
-            print(f"[stage] Re-downloading background FITS after failed validation…", file=sys.stderr)
-            redownload(remote_or_local, out_path)
-            ready = gunzip_to_same_dir(out_path)
-            if not validate_background_fits(ready):
-                raise RuntimeError(f"[stage] Background FITS still invalid after re-download: {ready}")
-        return [ready]
-
-    if out_path.suffix == ".zip":
-        try:
-            with zipfile.ZipFile(out_path, "r") as zf:
+            with zipfile.ZipFile(target_file, "r") as zf:
                 zf.testzip()
                 zf.extractall(target_dir)
-        except BadZipFile:
-            print(f"[stage] Corrupted .zip at {out_path}, re-downloading…", file=sys.stderr)
-            redownload(remote_or_local, out_path)
-            with zipfile.ZipFile(out_path, "r") as zf:
-                zf.testzip()
-                zf.extractall(target_dir)
-        files = ready_files(target_dir)
-        return files
+            return str(target_file)
+        except BadZipFile as e:
+            raise RuntimeError(f"[stage] Local .zip seems corrupted: {target_file} ({e})")
+    if kind == "background" and target_file.suffix.lower() == ".fits" and not validate_background_fits(target_file):
+        raise RuntimeError(f"[stage] Local background FITS seems corrupted: {dst}")
+    return str(target_file)
 
-    if kind == "background" and out_path.suffix.lower() == ".fits" and not validate_background_fits(out_path):
-        print(f"[stage] Background FITS invalid at {out_path}, re-downloading…", file=sys.stderr)
-        redownload(remote_or_local, out_path)
-        if not validate_background_fits(out_path):
-            raise RuntimeError(f"[stage] Background FITS still invalid after re-download: {out_path}")
-    return [out_path]
 
 def main():
     parser = argparse.ArgumentParser(description="Stage files from Wasabi or local path")
@@ -175,10 +129,10 @@ def main():
     dirs = json.loads(args.dirs)
 
     staged = {
-        "response":   [str(p) for p in download_or_use_one(inputs["response"],   Path(dirs["response"]),   kind="response")],
-        "orientation":[str(p) for p in download_or_use_one(inputs["orientation"],Path(dirs["orientation"]),kind="orientation")],
-        "source":     [str(p) for p in download_or_use_one(inputs["source"],     Path(dirs["source"]),     kind="source")],
-        "background": [str(p) for p in download_or_use_one(inputs["background"], Path(dirs["background"]), kind="background")],
+        "response":   download_or_use_one(inputs["response"],   Path(dirs["response"]),   kind="response"),
+        "orientation":download_or_use_one(inputs["orientation"],Path(dirs["orientation"]),kind="orientation"),
+        "source":     download_or_use_one(inputs["source"],     Path(dirs["source"]),     kind="source"),
+        "background": download_or_use_one(inputs["background"], Path(dirs["background"]), kind="background"),
     }
     
     # Print JSON result to stdout for XCom

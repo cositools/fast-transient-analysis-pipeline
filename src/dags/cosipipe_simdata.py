@@ -81,17 +81,16 @@ def next_run_products_dir(base_dest: Path) -> Path:
     run_dir = ensure_dir(base_month_dir / f"{yymmdd}{max_idx+1:03d}")
     return ensure_dir(run_dir / "products")
 
-def make_symlinks(target_dir: Path, files_by_kind: Dict[str, List[Path]]) -> Dict[str, List[str]]:
+
+def make_symlinks(target_dir: Path, files_by_kind: Dict[str, str]) -> Dict[str, str]:
+    """Create symlinks in target_dir for all paths in files_by_kind."""
     result = {}
     for kind, paths in files_by_kind.items():
-        result[kind] = []
-        for p in paths:
-            link = target_dir / p.name
-            if not link.exists():
-                link.symlink_to(p)
-                print(f"[symlink] {link} -> {p}")
-            # append anyway, even if it already existed
-            result[kind].append(str(link))
+        link = target_dir / Path(paths).name
+        if not link.exists():
+            link.symlink_to(paths)
+            print(f"[symlink] {link} -> {paths}")
+        result[kind] = str(link)
     return result
 
 # === DAG ===
@@ -182,6 +181,30 @@ with DAG(
 
     t_products = PythonOperator(task_id="create_products_dir", python_callable=create_products_dir)
 
+    def create_symlinks(ti):
+        """
+        Create symlinks in products/ and return the paths for the downstream tasks.
+        """
+        staged_json = ti.xcom_pull(task_ids="stage_all_files")
+        if isinstance(staged_json, str):
+            staged = json.loads(staged_json)
+        else:
+            staged = staged_json
+
+        products_dir = Path(ti.xcom_pull(task_ids="create_products_dir")["products_dir"])
+
+        files_by_kind = {
+            "source":      staged["source"],
+            "response":    staged["response"],
+            "orientation": staged["orientation"],
+            "background":  staged["background"],
+        }
+
+        return make_symlinks(products_dir, files_by_kind)
+
+    t_link = PythonOperator(task_id="create_symlinks", python_callable=create_symlinks)
+
+    #=== 6. Background cut ===
     t_bkgcut = DockerOperator(
         task_id="background_cut",
         image=CONTAINER_IMAGE,
@@ -194,37 +217,12 @@ with DAG(
         ],
         command=[
             "python", BKG_CUT_SCRIPT,
-            "{{ ti.xcom_pull(task_ids='create_symlinks')['source'][0] }}",
-            "{{ ti.xcom_pull(task_ids='create_symlinks')['background'][0] }}",
+            "{{ ti.xcom_pull(task_ids='create_symlinks')['source'] }}",
+            "{{ ti.xcom_pull(task_ids='create_symlinks')['background'] }}",
             "--eps_time", "{{ ti.xcom_pull(task_ids='resolve_config')['eps_time'] }}"
         ],
         # docker_url is removed -> Airflow uses DOCKER_HOST env var automatically
         network_mode="bridge",
     )
-
-    def create_symlinks(ti):
-        """
-        Creates symlinks in products/ for staged files.
-        This runs in Airflow (PythonOperator) because it manages the filesystem structure.
-        """
-        # Parse the XCom from t_stage (which is a JSON string from stdout)
-        staged_json = ti.xcom_pull(task_ids="stage_all_files")
-        if isinstance(staged_json, str):
-            staged = json.loads(staged_json)
-        else:
-            staged = staged_json
-
-        products_dir = Path(ti.xcom_pull(task_ids="create_products_dir")["products_dir"])
-
-        files_by_kind = {
-            "source":      [Path(p) for p in staged.get("source", [])],
-            "response":    [Path(p) for p in staged.get("response", [])],
-            "orientation": [Path(p) for p in staged.get("orientation", [])],
-            "background":  [Path(p) for p in staged.get("background", [])],
-        }
-
-        return make_symlinks(products_dir, files_by_kind)
-
-    t_link = PythonOperator(task_id="create_symlinks", python_callable=create_symlinks)
 
     t_prepare >> t_resolve >> t_stage >> t_products >> t_link >> t_bkgcut
