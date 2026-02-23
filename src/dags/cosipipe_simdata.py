@@ -51,6 +51,7 @@ RAW_SUBDIRS = {
 DEST_MAP = {
     "lcurve": Path("/home/gamma/workspace/data/lcurve"),
     "tsmap": Path("/home/gamma/workspace/data/tsmap"),
+    "fast": Path("/home/gamma/workspace/data/fast_localize_grb")
 }
 
 # === Default Wasabi keys ===
@@ -106,7 +107,7 @@ with DAG(
         "orientation_path": Param(default=WASABI_DEFAULTS["orientation"], type="string"),
         "source_path": Param(default=WASABI_DEFAULTS["source"], type="string"),
         "background_path": Param(default=WASABI_DEFAULTS["background"], type="string"),
-        "destination": Param(default="tsmap", enum=["lcurve", "tsmap"]),
+        "destination": Param(default="tsmap", enum=list(DEST_MAP.keys())),  
         "eps_time": Param(default=1e-9, type="number"),
     },
 ) as dag:
