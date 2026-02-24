@@ -2,7 +2,8 @@ import json
 import argparse
 import os
 import shutil
-import gzip
+#import gzip
+import subprocess
 import zipfile
 import threading
 import time
@@ -42,8 +43,11 @@ def gunzip_to_same_dir(gz_path: Path) -> Path:
     ready = gz_path.with_suffix("")
     if ready.exists():
         return ready
-    with gzip.open(gz_path, "rb") as gz_f, open(ready, "wb") as out_f:
-        shutil.copyfileobj(gz_f, out_f)
+    # This is the old way to gunzip the file
+    #with gzip.open(gz_path, "rb") as gz_f, open(ready, "wb") as out_f:
+    #    shutil.copyfileobj(gz_f, out_f)
+    # This is the new way to gunzip the file
+    subprocess.run(["gunzip", "-f", str(gz_path)], check=True)
     gz_path.unlink(missing_ok=True)
     return ready
 
