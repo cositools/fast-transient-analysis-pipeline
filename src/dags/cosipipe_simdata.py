@@ -111,6 +111,7 @@ with DAG(
     },
 ) as dag:
 
+    # === 1. Prepare raw directories ===
     def prepare_raw_dirs():
         # Ensure that all raw data subdirectories exist locally (Airflow side)
         # Note: DockerOperator will also need these to exist on host if we mount them.
@@ -120,6 +121,7 @@ with DAG(
 
     t_prepare = PythonOperator(task_id="prepare_raw_dirs", python_callable=prepare_raw_dirs)
 
+    # === 2. Resolve configuration ===
     def resolve_config(**context):
         # Resolve parameters and input paths
         p = context["params"]
@@ -151,6 +153,7 @@ with DAG(
         raise ValueError("HOST_WORKSPACE_PATH is not set. "
         "Set env var HOST_WORKSPACE_PATH in docker-compose or Airflow Variable COSIDAG_DOCKER_HOST_WORKSPACE_PATH.")
 
+    # === 3. Stage all files ===
     t_stage = DockerOperator(
         task_id="stage_all_files",
         image=CONTAINER_IMAGE,
@@ -173,6 +176,7 @@ with DAG(
         do_xcom_push=True, # Capture the JSON output from stdout
     )
 
+    # === 4. Create products directory ===
     def create_products_dir(ti):
         # Create the unique products directory for this run
         cfg = ti.xcom_pull(task_ids="resolve_config")
@@ -181,6 +185,7 @@ with DAG(
 
     t_products = PythonOperator(task_id="create_products_dir", python_callable=create_products_dir)
 
+    # === 5. Create symlinks ===
     def create_symlinks(ti):
         """
         Create symlinks in products/ and return the paths for the downstream tasks.
