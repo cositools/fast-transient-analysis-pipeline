@@ -17,10 +17,10 @@ def ensure_dir(p: Path) -> Path:
     return p
 
 def heartbeat(stop_event, msg):
-    """Prints a heartbeat message every 60s to keep connection alive."""
+    """Prints a heartbeat message every 15s to keep connection alive."""
     while not stop_event.is_set():
         print(f"[heartbeat] {msg} - Still working...", flush=True, file=sys.stderr)
-        time.sleep(60)
+        time.sleep(15)
 
 def ready_files(target_dir: Path) -> list[Path]:
     return [p for p in target_dir.iterdir() if p.is_file() and not p.name.endswith((".zip", ".gz"))]
@@ -46,8 +46,11 @@ def gunzip_to_same_dir(gz_path: Path) -> Path:
     # This is the old way to gunzip the file
     #with gzip.open(gz_path, "rb") as gz_f, open(ready, "wb") as out_f:
     #    shutil.copyfileobj(gz_f, out_f)
-    # This is the new way to gunzip the file
+    # This is the new way to gunzip the file, and wait until the file is ready
     subprocess.run(["gunzip", "-f", str(gz_path)], check=True)
+    while not ready.exists():
+        time.sleep(1)
+    # Remove the gzip file
     gz_path.unlink(missing_ok=True)
     return ready
 
@@ -73,16 +76,16 @@ def redownload(remote_key: str, out_path: Path) -> None:
         pass
     fetch_wasabi(remote_key, out_path)
 
-def download_or_use_one(remote_or_local: str, target_dir: Path, *, kind: str) -> list[Path]:
+def download_or_use_one(remote_or_local: str, target_dir: Path, *, kind: str) -> str:
     """
     Downloads or uses a file from Wasabi or local path.
-    Returns a list of paths to the files that were downloaded or used.
+    Returns the path to the file that was downloaded or used.
     Parameters:
         remote_or_local: The path to the file to download or use.
         target_dir: The directory to download the file to.
         kind: The kind of file to download or use.
     Returns:
-        A list of paths to the files that were downloaded or used.
+        The path to the file that was downloaded or used.
     """
     # Ensure target directory exists
     ensure_dir(target_dir)
@@ -101,7 +104,6 @@ def download_or_use_one(remote_or_local: str, target_dir: Path, *, kind: str) ->
         return str(target_dir / file_name)
 
     # If not ready file exists, download the file
-    src = Path(remote_or_local)
     target_file = target_dir / file_name
     fetch_wasabi(remote_or_local, target_file)
     

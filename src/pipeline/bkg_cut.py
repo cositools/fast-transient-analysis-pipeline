@@ -8,6 +8,7 @@ import argparse
 This script is used to cut the background window from the background file.
 """
 
+# === 1. Check file ===
 def check_file(path):
     """Check if the file exists"""
     print(f"Checking file: {path}")
@@ -17,27 +18,30 @@ def check_file(path):
     print(f"File found: {path}")
     return True
 
+# === 2. Open background file ===
 def open_background(background_path):
     """Open the background file"""
     check_file(background_path)
     # Open the background file
     print(f"Opening background file: {background_path}")
-    hdul = fits.open(background_path)
-    bkg_full = hdul[1].data
+    with fits.open(background_path) as hdul:
+        bkg_full = hdul[1].data
     return bkg_full
 
+# === 3. Get times source ===
 def get_times_source(source_path):
     """Get the starting and ending time tag of the GRB"""
     check_file(source_path)
     # Read the GRB signal
-    signal = fits.open(source_path)
-    # get the starting and ending time tag of the GRB
-    times = signal[1].data["TimeTags"]
-    grb_tmin = float(np.min(times))
-    grb_tmax = float(np.max(times))
+    with fits.open(source_path) as signal:
+        # get the starting and ending time tag of the GRB
+        times = signal[1].data["TimeTags"]
+        grb_tmin = float(np.min(times))
+        grb_tmax = float(np.max(times))
     grb_duration = grb_tmax - grb_tmin
     return grb_tmin, grb_tmax, grb_duration
-    
+
+# === 4. Extract background window ===
 def extract_bkg_window(background_path, source_path, eps_time = 0.000000001):
     """Extract the background window from the background file. 
        The eps_time is the adding time in seconds to add before and after the source time 
@@ -48,6 +52,7 @@ def extract_bkg_window(background_path, source_path, eps_time = 0.000000001):
     bkg_cut = bkg_full[mask]
     return bkg_cut
 
+# === 5. Save background window ===
 def save_bkg_window(background_path, source_path, eps_time):
     """Save the background window to a file"""
     # Reuse the same name of the background file but with the word "cut" added
