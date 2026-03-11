@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# This script is used to install the fast-transient-analysis-pipeline module in the cosiflow environment,
+# it prepares the cosiflow environment to run the fast-transient-analysis-pipeline module.
+#
+# The repository must be cloned in a subfolder of your home directory, e.g.:
+# `$HOME/cosi/fast-transient-analysis-pipeline`
+# 
+# The script assumes that the folder `$HOME/cosi` exists and is a subfolder of your home directory, if you 
+# want to change the path, you can modify the COSI_PATH argument for running the script from a different path.
+#
+# The script will:
+# 1. Download the cosiflow repository
+# 2. Modify permissions in the compose file
+# 3. Modify the Dockerfile for the fast-transient-analysis-pipeline repository
+# 4. Build the cosiflow environment, with the containers stack
+# 5. Start the cosiflow environment, with the containers stack running
+# 6. Run the hot_load_module.sh script for preparing the fast-transient-analysis-pipeline module in 
+#    the cosiflow environment in python virtual environment mode
+
+# default path for the cosiflow and fast-transient-analysis-pipeline repositories, change if argument
+# long argument --cosi-path is provided, or short argument -c is provided:
+#   $ ./install.sh --cosi-path /path/to/cosi
+#   $ ./install.sh -c /path/to/cosi
+# if no argument is provided, use the default path
+
+# ==============================================
+# 0. Parse the arguments
+# ==============================================
+# parse the arguments, long argument --cosi-path is provided, or short argument -c is provided:
+# if no argument is provided, use the default path
+while getopts "c:" opt; do
+    case $opt in
+        c) COSI_PATH=$OPTARG ;;
+        :) echo "Option -$OPTARG requires an argument." >&2; exit 1 ;;
+        *) echo "Usage: $0 [-c <cosi_path>]" >&2; exit 1 ;;
+        esac
+    done
+
+# if no argument is provided, use the default path
+if [ -z "$COSI_PATH" ]; then
+    COSI_PATH=$HOME/cosi
+fi
+
+# ==============================================
+# 1. Download the cosiflow repository
+# ==============================================
+cd $COSI_PATH
+git clone https://github.com/cosi-project/cosiflow.git
+# ==============================================
+# 2. Modify permissions in the compose file
+# ==============================================
+cd cosiflow/env
+# get the current user and group ids
+USER_ID=$(id -u)
+GROUP_ID=$(id -g)
+# modify the compose file to add the fast-transient-analysis-pipeline repository
+sed -i "s/UID: 12050/UID: $USER_ID/" docker-compose.yaml
+sed -i "s/GID: 10000/GID: $GROUP_ID/" docker-compose.yaml
+# log the modified compose file
+echo "Compose file modified with user and group ids: $USER_ID:$GROUP_ID"
+# ==============================================
+# 3. Modify the Dockerfile for the fast-transient-analysis-pipeline repository
+# ==============================================
+sed -i "s/UID: 12050/UID: $USER_ID/" Dockerfile
+sed -i "s/GID: 10000/GID: $GROUP_ID/" Dockerfile
+# ==============================================
+# 4. Build the cosiflow environment, with the containers stack
+# ==============================================
+cd $HOME/cosi/cosiflow/env
+docker compose build
+# ==============================================
+# 5. Start the cosiflow environment, with the containers stack running
+# ==============================================
+docker compose up -d
+# ==============================================
+# 6. Run the hot_load_module.sh script for preparing the fast-transient-analysis-pipeline module in 
+#    the cosiflow environment in python virtual environment mode
+# ==============================================
+# Modify the configuration file for the fast-transient-analysis-pipeline module to run in python virtual environment mode
+sed -i "s/install_mode: both/install_mode: environment/" $HOME/cosi/fast-transient-analysis-pipeline/env/fta-pipe.config.yaml
+# Run the hot_load_module.sh script for preparing the fast-transient-analysis-pipeline module in 
+#    the cosiflow environment in python virtual environment mode
+cd $HOME/cosi/cosiflow/env
+./hot_load_module.sh fast-transient-analysis-pipeline install
+# ==============================================
