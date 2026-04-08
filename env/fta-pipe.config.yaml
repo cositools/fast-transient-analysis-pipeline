@@ -38,9 +38,11 @@ environments:
   # Environment 1: Stable cosipy environment
   cosipy:
     requirements: env/requirements.txt
+    requirements_no_deps: env/requirements_nodeps.txt
     venv_path: /home/gamma/envs/cosipy
     enabled: true
     description: "Stable cosipy environment"
+    python_version: "3.11"
   
 # Default environment to use if none specified
 default_environment: cosipy
