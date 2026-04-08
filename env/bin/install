@@ -24,6 +24,56 @@
 #   $ ./install.sh -c /path/to/cosi
 # if no argument is provided, use the default path
 
+# define a macro `log` for printing messages with color green
+log() {
+    echo -e "\033[32m$1\033[0m"
+}
+
+# define a macro `error` for printing messages with color red
+error() {
+    echo -e "\033[31m$1\033[0m"
+    exit 1
+}
+
+# Step 3: one line per variable:
+# NAME|default_value|Prompt text|sed_pattern|replacement_template
+map_compose_variables() {
+    cat <<'EOF'
+AIRFLOW_ADMIN_PASSWORD|cosipass|Enter the password for the Airflow Web UI|^  AIRFLOW_ADMIN_PASSWORD: \${AIRFLOW_ADMIN_PASSWORD:-[^}]*}|  AIRFLOW_ADMIN_PASSWORD: \${AIRFLOW_ADMIN_PASSWORD:-__VALUE__}
+HOST_IP|localhost|Enter the HOST_IP|^  HOST_IP: \${HOST_IP:-[^}]*}|  HOST_IP: \${HOST_IP:-__VALUE__}
+AIRFLOW_ADMIN_USERNAME|admin|Enter the Airflow admin username|^  AIRFLOW_ADMIN_USERNAME: \${AIRFLOW_ADMIN_USERNAME:-[^}]*}|  AIRFLOW_ADMIN_USERNAME: \${AIRFLOW_ADMIN_USERNAME:-__VALUE__}
+AIRFLOW_ADMIN_EMAIL|admin@localhost|Enter the Airflow admin email|^  AIRFLOW_ADMIN_EMAIL: \${AIRFLOW_ADMIN_EMAIL:-[^}]*}|  AIRFLOW_ADMIN_EMAIL: \${AIRFLOW_ADMIN_EMAIL:-__VALUE__}
+MAILHOG_WEBUI_PORT|8025|Enter the MailHog Web UI port|^  MAILHOG_WEBUI_PORT: \${MAILHOG_WEBUI_PORT:-[^}]*}|  MAILHOG_WEBUI_PORT: \${MAILHOG_WEBUI_PORT:-__VALUE__}
+AIRFLOW_WEBUI_PORT|8080|Enter the Airflow Web UI port|^  AIRFLOW_WEBUI_PORT: \${AIRFLOW_WEBUI_PORT:-[^}]*}|  AIRFLOW_WEBUI_PORT: \${AIRFLOW_WEBUI_PORT:-__VALUE__}
+POSTGRES_USER|airflow_user|Enter the Postgres username|^  POSTGRES_USER: \${POSTGRES_USER:-[^}]*}|  POSTGRES_USER: \${POSTGRES_USER:-__VALUE__}
+POSTGRES_DB|airflow_db|Enter the Postgres database name|^  POSTGRES_DB: \${POSTGRES_DB:-[^}]*}|  POSTGRES_DB: \${POSTGRES_DB:-__VALUE__}
+POSTGRES_PASSWORD|secure_password|Enter the Postgres password|^  POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-[^}]*}|  POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-__VALUE__}
+EOF
+}
+
+prompt_and_update_compose_var() {
+    local name="$1"
+    local default="$2"
+    local prompt="$3"
+    local pattern="$4"
+    local replacement_template="$5"
+    local value value_escaped replacement
+
+    read -r -p "$prompt (default is $default): " value </dev/tty
+    value="${value:-$default}"
+
+    # Escape for sed replacement
+    value_escaped="${value//\\/\\\\}"
+    value_escaped="${value_escaped//#/\\#}"
+    value_escaped="${value_escaped//&/\\&}"
+
+    replacement="${replacement_template//__VALUE__/$value_escaped}"
+
+    sed -i '' "s#${pattern}#${replacement}#" docker-compose.yaml || error "Failed to update $name in docker-compose.yaml"
+
+    log "Compose file modified with $name: $value"
+}
+
 # ==============================================
 # 0. Parse the arguments
 # ==============================================
@@ -49,44 +99,85 @@ BRANCH_COSIFLOW="container_arch"
 # 1. Download the cosiflow repository
 # ==============================================
 cd $COSI_PATH
-git clone https://github.com/cosi-project/cosiflow.git
+git clone https://github.com/cositools/cosiflow.git
 # checkout the default branch for the cosiflow repository
 cd $COSI_PATH/cosiflow
 git checkout $BRANCH_COSIFLOW
 # ==============================================
 # 2. Modify permissions in the compose file
 # ==============================================
-cd $COSI_PATH/cosiflow/env
+cd "$COSI_PATH/cosiflow/env" || error "Failed to cd to $COSI_PATH/cosiflow/env"
 # get the current user and group ids
-USER_ID=$(id -u)
-GROUP_ID=$(id -g)
-# modify the compose file to add the fast-transient-analysis-pipeline repository
-sed -i "s/UID: 12050/UID: $USER_ID/" docker-compose.yaml
-sed -i "s/GID: 10000/GID: $GROUP_ID/" docker-compose.yaml
-# log the modified compose file
-echo "Compose file modified with user and group ids: $USER_ID:$GROUP_ID"
+USER_ID=$(id -u) || error "Failed to get user id"
+GROUP_ID=$(id -g) || error "Failed to get group id"
+# modify the compose file to add the user and group ids, section to change is:
+# x-build-args: &build-args
+#   UID: ${UID:-}                                                # TOEDIT: set the UID of the user in the container (default: 501)
+#   GID: ${GID:-}                                                # TOEDIT: set the GID of the user in the container (default: 20)
+sed -i '' "s/UID: \${UID:-[^}]*}/UID: \${UID:-$USER_ID}/" docker-compose.yaml || error "Failed to update UID in docker-compose.yaml"
+sed -i '' "s/GID: \${GID:-[^}]*}/GID: \${GID:-$GROUP_ID}/" docker-compose.yaml || error "Failed to update GID in docker-compose.yaml"
+sed -i '' "s/      - UID=\${UID:-[^}]*}/      - UID=\${UID:-$USER_ID}/" docker-compose.yaml || error "Failed to update UID in docker-compose.yaml"
+sed -i '' "s/      - GID=\${GID:-[^}]*}/      - GID=\${GID:-$GROUP_ID}/" docker-compose.yaml || error "Failed to update GID in docker-compose.yaml"
+
+# log the modified compose file, print with color green
+log "Compose file modified with user and group ids: $USER_ID:$GROUP_ID"
+# do the same for the Dockerfile
+sed -i '' "s/ARG UID=[^}]*/ARG UID=$USER_ID/" Dockerfile.airflow || error "Failed to update UID in Dockerfile.airflow"
+sed -i '' "s/ARG GID=[^}]*/ARG GID=$GROUP_ID/" Dockerfile.airflow || error "Failed to update GID in Dockerfile.airflow"
+# log the modified Dockerfile
+log "Dockerfile.airflow modified with user and group ids: $USER_ID:$GROUP_ID"
 # ==============================================
-# 3. Modify the Dockerfile for the fast-transient-analysis-pipeline repository
+# 3. Configure the Airflow Environment Variables
 # ==============================================
-sed -i "s/UID: 12050/UID: $USER_ID/" Dockerfile
-sed -i "s/GID: 10000/GID: $GROUP_ID/" Dockerfile
+while IFS='|' read -r name default prompt pattern replacement_template; do
+    prompt_and_update_compose_var "$name" "$default" "$prompt" "$pattern" "$replacement_template"
+done < <(map_compose_variables)
+
+read -p "Press Enter to continue"
 # ==============================================
-# 4. Build the cosiflow environment, with the containers stack
+# 4. Modify the Dockerfile for the fast-transient-analysis-pipeline repository
 # ==============================================
-cd $COSI_PATH/cosiflow/env
-docker compose build
+cd "$COSI_PATH/fast-transient-analysis-pipeline/env" || error "Failed to cd to $COSI_PATH/fast-transient-analysis-pipeline/env"
+sed -i '' "s/UID: [^}]*/UID: $USER_ID/" Dockerfile || error "Failed to update UID in Dockerfile"
+sed -i '' "s/GID: [^}]*/GID: $GROUP_ID/" Dockerfile || error "Failed to update GID in Dockerfile"
+# log the modified Dockerfile
+log "Dockerfile modified with user and group ids: $USER_ID:$GROUP_ID"
+# ask to user to press Enter to continue
+read -p "Press Enter to continue"
 # ==============================================
-# 5. Start the cosiflow environment, with the containers stack running
+# 5. Build the cosiflow environment, with the containers stack
 # ==============================================
-docker compose up -d
+cd "$COSI_PATH/cosiflow/env" || error "Failed to cd to $COSI_PATH/cosiflow/env"
+docker compose build || error "Failed to build Cosiflow environment (docker compose build)"
+# log the build
+log "Cosiflow environment built"
+# ask to user to press Enter to continue
+read -p "Press Enter to continue"
 # ==============================================
-# 6. Run the hot_load_module.sh script for preparing the fast-transient-analysis-pipeline module in 
+# 6. Start the cosiflow environment, with the containers stack running
+# ==============================================
+# docker compose up >> $COSI_PATH/cosiflow.log 2>&1 || error "Failed to start Cosiflow environment (docker compose up)"
+docker compose up -d || error "Failed to start Cosiflow environment (docker compose up -d)"
+# log the start
+log "Cosiflow environment started"
+# ask to user to press Enter to continue
+read -p "Press Enter to continue"
+# ==============================================
+# 7. Run the hot_load_module.sh script for preparing the fast-transient-analysis-pipeline module in 
 #    the cosiflow environment in python virtual environment mode
 # ==============================================
 # Modify the configuration file for the fast-transient-analysis-pipeline module to run in python virtual environment mode
-sed -i "s/install_mode: both/install_mode: environment/" $COSI_PATH/fast-transient-analysis-pipeline/env/fta-pipe.config.yaml
+sed -i '' "s/install_mode: [^}]*/install_mode: environment/" "$COSI_PATH/fast-transient-analysis-pipeline/env/fta-pipe.config.yaml" || error "Failed to update install_mode in fta-pipe.config.yaml"
+# log the modified configuration file
+log "Configuration file modified with install_mode: environment"
+# ask to user to press Enter to continue
+read -p "Press Enter to continue"
 # Run the hot_load_module.sh script for preparing the fast-transient-analysis-pipeline module in 
 #    the cosiflow environment in python virtual environment mode
-cd $COSI_PATH/cosiflow/env
-./hot_load_module.sh fast-transient-analysis-pipeline install
+cd "$COSI_PATH/cosiflow/env" || error "Failed to cd to $COSI_PATH/cosiflow/env"
+./hot_load_module.sh fast-transient-analysis-pipeline install || error "Failed to run hot_load_module.sh for fast-transient-analysis-pipeline"
+# log the hot_load_module.sh script
+log "Hot_load_module.sh script run"
+# ask to user to press Enter to continue
+read -p "Press Enter to continue"
 # ==============================================
