@@ -77,6 +77,19 @@ def build_custom(dag):
         return preprocess_data(payload)
 
     # ---- 3.2. _run_data_binning
+    def _run_unbinned_light_curve_generation(lib_dir: str, config_path: str):
+        import os
+        import sys
+
+        if not config_path or not os.path.exists(config_path):
+            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
+
+        sys.path.insert(0, lib_dir)
+        from deg_functions import unbinned_light_curve_generation
+
+        return unbinned_light_curve_generation(config_path)
+
+    # ---- 3.3. _run_data_binning
     def _run_data_binning(lib_dir: str, config_path: str):
         import os
         import sys
@@ -117,7 +130,7 @@ def build_custom(dag):
             "skipped_binning": False,
         }
 
-    # ---- 3.3. _run_tsmap
+    # ---- 3.4. _run_tsmap
     def _run_tsmap(lib_dir: str, config_path: str):
         import os
         import sys
@@ -130,7 +143,7 @@ def build_custom(dag):
 
         return compute_ts_map(config_path)
 
-    # ---- 3.4. _run_light_curve
+    # ---- 3.5. _run_light_curve
     def _run_light_curve(lib_dir: str, config_path: str):
         import os
         import sys
@@ -142,6 +155,56 @@ def build_custom(dag):
         from deg_functions import light_curve
 
         return light_curve(config_path)
+
+    # ---- 3.6. _run_duration
+    def _run_duration(lib_dir: str, config_path: str):
+        import os
+        import sys
+
+        if not config_path or not os.path.exists(config_path):
+            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
+
+        sys.path.insert(0, lib_dir)
+        from deg_functions import duration
+
+        return duration(config_path)
+
+    def _run_light_curve_analysis(lib_dir: str, config_path: str):
+        import os
+        import sys
+
+        if not config_path or not os.path.exists(config_path):
+            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
+
+        sys.path.insert(0, lib_dir)
+        from deg_functions import light_curve_analysis
+
+        return light_curve_analysis(config_path)
+
+    def _run_skymap_unbinned(lib_dir: str, config_path: str):
+        import os
+        import sys
+
+        if not config_path or not os.path.exists(config_path):
+            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
+
+        sys.path.insert(0, lib_dir)
+        from deg_functions import skymap_unbinned
+
+        return skymap_unbinned(config_path)
+
+    def _run_duration_and_localization_results(lib_dir: str, config_path: str):
+        import os
+        import sys
+
+        if not config_path or not os.path.exists(config_path):
+            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
+
+        sys.path.insert(0, lib_dir)
+        from deg_functions import duration_and_localization_results
+
+        return duration_and_localization_results(config_path)
+
     # ======================================================================
     # DAG-GeD (bottom row)
     # ======================================================================
@@ -161,7 +224,16 @@ def build_custom(dag):
     )
 
     # Node 2. Unbinned_Light_Curve_Generation
-    ged_unbinned_light_curve_generation = EmptyOperator(task_id="Unbinned_Light_Curve_Generation", dag=dag)
+    ged_unbinned_light_curve_generation = ExternalPythonOperator(
+        task_id="Unbinned_Light_Curve_Generation",
+        python=EXTERNAL_PYTHON_COSIPY,
+        python_callable=_run_unbinned_light_curve_generation,
+        op_kwargs={
+            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
+            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
+        },
+        dag=dag,
+    )
     # Node 3. Data_Binning
     ged_data_binning = ExternalPythonOperator(
         task_id="Data_Binning",
@@ -174,11 +246,38 @@ def build_custom(dag):
         dag=dag,
     )
 
-    # Node 4. Light_Curve_Analysis
-    ged_light_curve_analysis = EmptyOperator(task_id="Light_Curve_Analysis", dag=dag)\
-    # Node 5. Duration_and_Localization_Results
-    ged_duration_and_localization_results = EmptyOperator(
-        task_id="Duration_and_Localization_Results", dag=dag
+    # Node 4. Light_Curve_Analysis (ON/OFF + Li&Ma prep)
+    ged_light_curve_analysis = ExternalPythonOperator(
+        task_id="Light_Curve_Analysis",
+        python=EXTERNAL_PYTHON_COSIPY,
+        python_callable=_run_light_curve_analysis,
+        op_kwargs={
+            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
+            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
+        },
+        dag=dag,
+    )
+    # Node 4.1. Skymap_unbinned (HEALPix significance map)
+    ged_skymap_unbinned = ExternalPythonOperator(
+        task_id="Skymap_unbinned",
+        python=EXTERNAL_PYTHON_COSIPY,
+        python_callable=_run_skymap_unbinned,
+        op_kwargs={
+            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
+            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
+        },
+        dag=dag,
+    )
+    # Node 5. Duration_and_Localization_Results (best pixel, CSV/PNG, optional LC script)
+    ged_duration_and_localization_results = ExternalPythonOperator(
+        task_id="Duration_and_Localization_Results",
+        python=EXTERNAL_PYTHON_COSIPY,
+        python_callable=_run_duration_and_localization_results,
+        op_kwargs={
+            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
+            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
+        },
+        dag=dag,
     )
 
     # Node 6. TS_Map_on_different_timescales
@@ -204,7 +303,16 @@ def build_custom(dag):
         dag=dag,
     )
     # Node 8. Duration
-    ged_duration = EmptyOperator(task_id="Duration", dag=dag)
+    ged_duration = ExternalPythonOperator(
+        task_id="Duration",
+        python=EXTERNAL_PYTHON_BGO,
+        python_callable=_run_duration,
+        op_kwargs={
+            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
+            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
+        },
+        dag=dag,
+    )
     # Node 9. Spectral_Analysis
     ged_spectral_analysis = EmptyOperator(task_id="Spectral_Analysis", dag=dag)
     # Node 10. Classification_GeD
@@ -217,7 +325,7 @@ def build_custom(dag):
     ged_pre_processing >> [ged_unbinned_light_curve_generation, ged_data_binning]
 
     # Node 2 -> Node 4 -> Node 5
-    ged_unbinned_light_curve_generation >> ged_light_curve_analysis >> ged_duration_and_localization_results
+    ged_unbinned_light_curve_generation >> ged_light_curve_analysis >> ged_skymap_unbinned >> ged_duration_and_localization_results
     # Node 3 -> Node 6 -> Node 7 -> Node 8 -> Node 9 -> Node 10
     ged_data_binning >> ged_tsmap_on_timescales >> ged_light_curve >> ged_duration >> ged_spectral_analysis >> ged_classification
     # Node 5 -> Node 11, Node 10 -> Node 11
@@ -243,8 +351,8 @@ with COSIDAG(
     file_patterns={
         # Fast transient inputs
 #        # Support both production-style unbinned FITS and tutorial/classic binned HDF5.
-#        "grb_file": "*[Gg][Rr][Bb]*",
-#        "background_file": "*[Bb][Gg]*",
+        "grb_file": "*[Gg][Rr][Bb]*.fits*",
+        "background_file": "*[Bb][Gg]*.fits*",
 #        "background_window_file": "Total_BG*_unbinned_*_window.fits*",
 #        "orientation_file": "*.fits*",
 #        "response_file": "*.h5",
@@ -252,10 +360,13 @@ with COSIDAG(
 #        "soft_lut_file": "soft_lut_*.pkl",
 #        "medium_lut_file": "medium_lut_*.pkl",
 #        "hard_lut_file": "hard_lut_*.pkl",
-        "grb_file": "*grb*binned*.hdf5",
-        "background_file": "*bkg*binned*.hdf5",
-        "orientation_file": "*.fits",
-        "response_file": "*.h5",
+#        "grb_file": "*grb*binned*.hdf5",
+#        "background_file": "*bkg*binned*.hdf5",
+        # Orientation file must end with .fits or .ori and must not contain "GRB" or "BG".
+        #"orientation_file": "!{*[Gg][Rr][Bb]*|*[Bb][Gg]*}*.{fits/ori}",
+        "orientation_file": "regex:^(?!.*(?:GRB|BG)).*\\.(?:fits|ori)$",
+        # Response file must end with .h5 and must not contain "GRB" or "BG".
+        "response_file": "regex:^(?!.*(?:GRB|BG)).*\\.h5$",
     },
     auto_retrig=True,
     build_custom=build_custom,
