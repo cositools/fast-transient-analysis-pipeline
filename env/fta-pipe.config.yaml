@@ -10,12 +10,12 @@
 # ==============================================================================
 # Installation Options
 # ==============================================================================
-# install_mode: What to install when running 'install' command
+# install_mode: environment
 #   - "container": Only build Docker image (equivalent to -f flag)
 #   - "environment": Only create Python virtual environments (equivalent to -e flag)
 #   - "both": Build Docker image AND create environments (equivalent to -a flag)
 #   - "none": Skip installation (only link DAGs and pipeline)
-install_mode: both
+install_mode: environment
 
 # ==============================================================================
 # Paths Configuration
@@ -42,7 +42,7 @@ environments:
     venv_path: /home/gamma/envs/cosipy
     enabled: true
     description: "Stable cosipy environment"
-    python_version: "3.11"
+    python_version: "3.12"
   
 # Default environment to use if none specified
 default_environment: cosipy
