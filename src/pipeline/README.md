@@ -1,90 +1,52 @@
-# Pipeline
+# Pipeline Scripts
 
-## Overview
+This directory contains the Python code executed by the Airflow DAGs in `../dags/`.
 
-All example pipelines (Light Curve, TSMap, etc.) are initialized and triggered **through the Airflow Web UI** using the **`init_pipelines` DAG**.
+The DAG catalog and operational entry points are documented in:
 
-Each scientific pipeline is implemented as a dedicated **COSIDAG** (e.g. Light Curve, TSMap), while `init_pipelines` acts as a **single entry point** responsible for initialization and routing.
+```text
+../dags/README.md
+```
 
-The `init_pipelines` DAG is responsible for:
+## Current Workflow
 
-* staging all required inputs (response, orientation, source, background)
-* validating paths and configuration
-* selecting which scientific pipeline to run (`lcurve`, `tsmap`, …)
-* defining **where outputs are stored** (Light Curve or TSMap folders)
-* triggering the appropriate downstream COSIDAG automatically
+For the Light Curve and TS Map workflows, the usual flow is:
 
-**No manual scripts are required anymore to start individual pipelines.**
+1. Enable the target COSIDAG in the Airflow UI:
+   * `cosidag_lcurve_extpy` or `cosidag_lcurve_dock`
+   * `cosidag_tsmap_extpy` or `cosidag_tsmap_dock`
+2. Enable and trigger `init_pipelines`.
+3. Set the `destination` parameter:
+   * `lcurve` writes staged products under `/home/gamma/workspace/data/lcurve`
+   * `tsmap` writes staged products under `/home/gamma/workspace/data/tsmap`
+   * `fast` writes staged products under `/home/gamma/workspace/data/fast_localize_grb`
+4. The enabled COSIDAG discovers new `products/` folders through `monitoring_folders`.
 
----
+`init_pipelines` prepares and stages files, creates the run `products/` directory,
+creates symlinks, and runs the background cut. It does not directly trigger the
+scientific COSIDAG with a `TriggerDagRunOperator`.
 
-## Starting a pipeline (NEW workflow)
+## Pipeline Areas
 
-### Step 1 — Enable the scientific COSIDAG
+| Directory or file | Used by | Purpose |
+| --- | --- | --- |
+| `stage_files.py` | `init_pipelines` | Stages source, background, orientation, and response files |
+| `bkg_cut.py` | `init_pipelines` | Creates the background time-window product |
+| `lcurve/` | `cosidag_lcurve_extpy`, `cosidag_lcurve_dock` | Light curve tasks |
+| `ts_map/` | `cosidag_tsmap_extpy`, `cosidag_tsmap_dock` | TS map tasks |
+| `fast_grb/` | `cosidag_fast_localize_grb`, `cosidag_fast_grb_timeseries` | Fast GRB localization and time-series tasks |
+| `fast_transient_pipeline/` | `cosidag_BGO`, `cosidag_GeD` | Fast transient BGO and GeD branch helpers |
+| `binning_script/` | Light Curve and TS Map tasks | Binning scripts and YAML inputs |
+| `download_data.py` | Utility script | Data download helper |
 
-Before triggering any pipeline, make sure that the **target COSIDAG** is enabled in the Airflow UI:
+## Runtime Styles
 
-* enable `cosipipe_lightcurve` for Light Curve products
-* enable `cosipipe_tsmap` for TS Map products
+The module includes both external-Python and Docker-based task implementations.
 
-This is required only once (or after a DAG refresh).
+| Style | DAG suffix | Runtime |
+| --- | --- | --- |
+| External Python | `_extpy` or no suffix for fast/BGO/GeD branches | `/home/gamma/envs/cosipy/bin/python` |
+| Docker | `_dock` and `init_pipelines` Docker tasks | `fast-transient-analysis-pipeline:latest` |
 
----
-
-### Step 2 — Use the `init_pipelines` DAG
-
-To start **any pipeline**, follow these steps:
-
-1. Open the **Airflow Web UI**
-
-2. Enable the DAG named **`init_pipelines`**
-
-3. Click **Trigger DAG**
-
-4. Fill in the required parameters:
-
-   * `response_path`
-   * `orientation_path`
-   * `source_path`
-   * `background_path`
-   * `destination` → choose where outputs will be saved:
-
-     * `lcurve` → results stored in the Light Curve pipeline folder
-     * `tsmap` → results stored in the TS Map pipeline folder
-   * other optional parameters (e.g. time windows)
-
-5. Click **Trigger**
-
-That’s it.
-The selected COSIDAG will be instantiated and executed automatically, with outputs routed to the chosen destination.
-
----
-
-## Supported pipelines
-
-| Destination value | Pipeline started     | Output location    |
-| ----------------- | -------------------- | ------------------ |
-| `lcurve`          | Light Curve plotting | Light Curve folder |
-| `tsmap`           | TS Map generation    | TS Map folder      |
-
-More destinations can be added without changing the user workflow.
-
----
-
-## What changed (important)
-
-### Old workflow (deprecated)
-
-* Manual scripts such as:
-
-  * `start_lcurvepipe.sh`
-  * `start_tsmappipe.sh`
-* Manual triggering of individual pipeline DAGs
-
-### New workflow (current)
-
-* **Single entry point:** `init_pipelines`
-* Explicit activation of the target COSIDAG
-* Fully UI-driven configuration
-* Output destination selected at trigger time
-* Cleaner, reproducible, and closer to production usage
+The default module configuration installs the external Python environment. Docker-based
+DAGs require the module Docker image and the host workspace mounts expected by the DAGs.

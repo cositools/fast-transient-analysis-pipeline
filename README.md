@@ -30,7 +30,8 @@ This README explains:
    4. [Step 4 — Review the module configuration file](#step-4--review-the-module-configuration-file)
    5. [Step 5 — Run the install script](#step-5--run-the-install-script)
    6. [Step 6 — Fill in the prompts and wait](#step-6--fill-in-the-prompts-and-wait)
-4. [After the installation](#after-the-installation)
+4. [DAG catalog](#dag-catalog)
+5. [After the installation](#after-the-installation)
 
 ---
 
@@ -50,8 +51,9 @@ container by the `hot_load_module.sh` helper script, which:
 - optionally builds a dedicated Docker image for the module (used by
   `DockerOperator` tasks).
 
-The behaviour of `hot_load_module.sh` is driven by a YAML configuration file that
-lives in the module root. For this module that file is
+The behaviour of `hot_load_module.sh` is driven by a YAML configuration file.
+The hot-loader can detect config files in the module root or under `env/`.
+For this module that file is
 [`env/fta-pipe.config.yaml`](env/fta-pipe.config.yaml).
 
 A standard Cosiflow module follows this directory layout (taken from
@@ -67,8 +69,11 @@ your_module_name/
 │   │   └── *.py
 │   └── pipeline/           # Pipeline scripts executed by tasks
 │       └── *.py
-└── <module>.config.yaml    # (recommended) configuration file for hot_load_module.sh
+└── <module>.config.yaml    # optional location for hot_load_module.sh configuration
 ```
+
+The hot-loader also detects module config files stored under `env/`, which is the
+layout used by this repository.
 
 For the full description of the module structure and of the configuration file,
 see the *Module Structure* and *Using Configuration Files* sections in
@@ -91,6 +96,7 @@ fast-transient-analysis-pipeline/
 │       └── install             # All-in-one bootstrap script (Cosiflow + this module)
 └── src/
     ├── dags/                   # Airflow DAGs (cosidag_*.py, cosipipe_*.py)
+    │   └── README.md           # DAG catalog and runtime notes
     └── pipeline/               # Pipeline scripts called by the DAGs
 ```
 
@@ -98,6 +104,8 @@ The DAGs in `src/dags/` use the `COSIDAG` framework provided by Cosiflow and cov
 among others, light-curve generation, TS-map computation, GRB localization, T90
 estimation and fast GRB time-series analysis (both as `DockerOperator` and
 `ExternalPythonOperator` variants).
+
+The current DAG IDs are documented in [`src/dags/README.md`](src/dags/README.md).
 
 ---
 
@@ -340,6 +348,35 @@ takes **tens of minutes**.
 When the script completes, you should see a final green log message and the
 `hot_load_module.sh` summary; at that point Airflow will already be running
 with the new DAGs being indexed.
+
+---
+
+## DAG catalog
+
+The module currently ships one initializer DAG and several COSIDAG-based scientific
+pipelines.
+
+The detailed catalog is maintained next to the DAG files:
+
+[`src/dags/README.md`](src/dags/README.md)
+
+In short:
+
+| DAG ID | Runtime style | Main role |
+| --- | --- | --- |
+| `init_pipelines` | `PythonOperator` + `DockerOperator` | Stage source/background/orientation/response files and create a run `products/` folder |
+| `cosidag_lcurve_extpy` | `ExternalPythonOperator` | Light curve pipeline using `/home/gamma/envs/cosipy` |
+| `cosidag_lcurve_dock` | `DockerOperator` | Light curve pipeline using the module Docker image |
+| `cosidag_tsmap_extpy` | `ExternalPythonOperator` | TS map pipeline using `/home/gamma/envs/cosipy` |
+| `cosidag_tsmap_dock` | `DockerOperator` | TS map pipeline using the module Docker image |
+| `cosidag_fast_localize_grb` | `ExternalPythonOperator` | Fast GRB localization |
+| `cosidag_fast_grb_timeseries` | `ExternalPythonOperator` | Fast GRB time-series/light-curve extraction |
+| `cosidag_BGO` | `ExternalPythonOperator` | BGO branch of the fast transient pipeline |
+| `cosidag_GeD` | `ExternalPythonOperator` | GeD branch of the fast transient pipeline |
+
+`init_pipelines` does not directly trigger downstream DAGs with a `TriggerDagRunOperator`.
+It creates/stages products under the selected destination directory. The corresponding
+COSIDAG then discovers those products through its configured `monitoring_folders`.
 
 ---
 
