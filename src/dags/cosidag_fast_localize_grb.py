@@ -135,7 +135,7 @@ with COSIDAG(
     date_queries=f"=={datetime.now().strftime('%Y%m%d')}",
     file_patterns={
         "grb_file": "GRB*_unbinned_*.fits*",
-        "background_file": "Total_BG*_unbinned_*_SAAcut.fits*",
+        "background_file": "regex:^Total.*BG.*_unbinned_(?!.*_window).*\\.fits(?:\\.gz)?$",
     },
     select_policy="latest_mtime",
     build_custom=build_custom,

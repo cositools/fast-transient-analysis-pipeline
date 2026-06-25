@@ -25,10 +25,11 @@ It accepts Airflow trigger parameters:
 
 | Parameter | Purpose |
 | --- | --- |
-| `response_path` | Response file or remote key |
-| `orientation_path` | Orientation file or remote key |
-| `source_path` | Source/GRB file or remote key |
-| `background_path` | Background file or remote key |
+| `data_challenge` | Preset input set, currently `DC3` or `DC4` |
+| `response_path` | Dropdown of response Wasabi keys; `__default__` uses the selected preset |
+| `orientation_path` | Dropdown of orientation Wasabi keys; `__default__` uses the selected preset |
+| `source_path` | Dropdown of source/GRB Wasabi keys; `__default__` uses the selected preset |
+| `background_path` | Dropdown of background Wasabi keys; `__default__` uses the selected preset |
 | `destination` | One of `lcurve`, `tsmap`, `fast` |
 | `eps_time` | Background-cut time tolerance |
 

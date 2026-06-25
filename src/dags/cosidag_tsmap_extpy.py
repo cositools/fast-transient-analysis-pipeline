@@ -128,8 +128,8 @@ with COSIDAG(
     date_queries=f"=={datetime.now().strftime('%Y%m%d')}",
     file_patterns={
         "grb_file": "GRB*_unbinned_*.fits*",
-        "background_file": "Total_BG*_unbinned_*_window.fits*",
-        "orientation_file": "*.ori",
+        "background_file": "Total*BG*_unbinned_*_window.fits*",
+        "orientation_file": "regex:^(?!.*(?:GRB|BG)).*\\.(?:fits|ori)$",
         "response_file": "Response*.h5",
     },
     select_policy="latest_mtime",   # oppure "first"
