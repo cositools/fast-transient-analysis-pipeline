@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 
+# Centralized defaults for every GeD analysis stage. User-provided YAML values
+# are deep-merged into this structure during preprocessing.
 GED_ANALYSIS_DEFAULTS: dict[str, Any] = {
     "unbinned_light_curve": {
         "arm-min": -15.0,
@@ -127,6 +129,7 @@ GED_ANALYSIS_DEFAULTS: dict[str, Any] = {
 def _deep_merge(base: dict[str, Any], override: dict[str, Any] | None) -> dict[str, Any]:
     from copy import deepcopy
 
+    # Keep defaults immutable for callers by always building a fresh tree.
     merged = deepcopy(base)
     if not override:
         return merged
@@ -143,6 +146,7 @@ def _to_yaml_safe(value: Any) -> Any:
 
     import numpy as np
 
+    # YAML cannot serialize numpy scalars, arrays, or Path objects directly.
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, np.generic):
@@ -163,6 +167,8 @@ def _now_iso() -> str:
 
 
 def _ensure_structured_pipeline_config(config: dict[str, Any]) -> dict[str, Any]:
+    # Airflow/DAG consumers expect a top-level run section named after the
+    # pipeline. This helper creates that section and records resolved inputs.
     pipeline_name = str(config.get("pipeline_name", "GeD"))
     run_cfg = config.setdefault(pipeline_name, {})
     run_cfg["name"] = config.get("cosidag_id", "cosidag_GeD")
@@ -191,6 +197,8 @@ def _record_pipeline_task(
     start_time: str | None = None,
     end_time: str | None = None,
 ) -> None:
+    # All task records share the same schema so the final YAML can be consumed
+    # by monitoring/reporting code without task-specific parsing.
     run_cfg = _ensure_structured_pipeline_config(config)
     existing = run_cfg.get(task_id, {})
     run_cfg[task_id] = {
@@ -207,6 +215,7 @@ def _ensure_pipeline_dirs(data_dir: str) -> tuple[Path, Path]:
     from pathlib import Path
 
     base_dir = Path(data_dir)
+    # Products stay beside the data while plots are grouped in a sibling folder.
     plots_dir = base_dir / ".." / "plots"
     products_dir = base_dir
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -233,6 +242,7 @@ def _write_histogram(hist: Any, path: str) -> str:
 
 
 def _prepared_time_window(config: dict[str, Any]) -> tuple[float, float]:
+    # Binned products include background padding around the burst interval.
     bin_cfg = dict(config.get("binning_data", {}))
     eps_pre = float(bin_cfg.get("eps_bkg_preburst", 0.0))
     eps_post = float(bin_cfg.get("eps_bkg_postburst", 0.0))
@@ -285,6 +295,8 @@ def _build_prepared_event_data(config: dict[str, Any]) -> dict[str, Any]:
     col_phi = str(fl.get("col_phi", "Phi"))
 
     t0 = time.perf_counter()
+    # Load source and background events once, then persist the prepared subsets
+    # so later unbinned tasks can skip the expensive FITS reads.
     t_grb, l_grb, b_grb, phi_grb = _fl_load_events_simple(
         source_path, col_time, col_l, col_b, col_phi, memmap=True
     )
@@ -295,6 +307,8 @@ def _build_prepared_event_data(config: dict[str, Any]) -> dict[str, Any]:
     on_start, on_stop = tstart, tstop
     off_start = tstart - off_pre
     off_stop = tstart - off_gap
+    # ON contains burst-window source events plus background events in the same
+    # interval. OFF uses a pre-burst background-only interval by default.
     m_on_grb = (t_grb >= on_start) & (t_grb < on_stop)
     m_on_bkg = (t_bkg >= on_start) & (t_bkg < on_stop)
     m_off_bkg = (t_bkg >= off_start) & (t_bkg < off_stop)
@@ -312,6 +326,8 @@ def _build_prepared_event_data(config: dict[str, Any]) -> dict[str, Any]:
     if on_l.size == 0:
         raise RuntimeError("No ON events found while building prepared event data.")
     if off_l.size == 0:
+        # Simulated or clipped files may not contain pre-burst background. In
+        # that case, optionally fall back to background events during the burst.
         if off_fallback_strategy == "on_background" and np.any(m_on_bkg):
             off_start, off_stop = on_start, on_stop
             off_t = t_bkg[m_on_bkg]
@@ -331,6 +347,8 @@ def _build_prepared_event_data(config: dict[str, Any]) -> dict[str, Any]:
     alpha = ton / toff
     event_data_path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(event_data_path, "w") as h5:
+        # Store window metadata as attributes and event columns as compressed
+        # datasets for fast random access by downstream stages.
         h5.attrs["format"] = "hdf5"
         h5.attrs["contains_background"] = True
         h5.attrs["source_path_original"] = source_path
@@ -403,6 +421,7 @@ def _build_prepared_binned_data(
     background_model_path = products_dir / "ged_preprocessed_background_model.hdf5"
 
     prepared_tstart, prepared_tstop = _prepared_time_window(config)
+    # Aggregate source and background histograms over the padded time window.
     data, bkg_model = fhf.aggregate_data(
         source_data_path,
         background_data_path,
@@ -449,12 +468,16 @@ def preprocess_data(
 
     import fast_helper_functions as fhf
 
+    # Accept both a config dict from Python callers and an existing YAML path
+    # from DAG/operator callers.
     if isinstance(lightcurve, str):
         config = fhf._load_yaml(lightcurve)
     elif isinstance(lightcurve, dict):
         config = dict(lightcurve)
     else:
         raise TypeError("preprocess_data expects a dict or a YAML path string")
+    # Promote nested analysis defaults to top-level sections for older tasks
+    # that still read config["tsmap"], config["duration"], etc.
     analysis_config = _deep_merge(GED_ANALYSIS_DEFAULTS, config.get("analysis_config", {}))
     config["analysis_config"] = analysis_config
     for section, defaults in analysis_config.items():
@@ -505,6 +528,8 @@ def preprocess_data(
     )
     # Ensure top-level time bounds exist for downstream binning.
     
+    # The source FITS time range defines the burst interval; eps_time keeps
+    # edge events from being lost to strict half-open comparisons downstream.
     grb_tstart, grb_tstop, grb_duration = fhf._infer_time_bounds_from_fits(str(config["source_path"]))
     print(
         "[preprocess_data] Inferred tstart/tstop/duration from source FITS: "
@@ -513,6 +538,8 @@ def preprocess_data(
     config["tstart"] = grb_tstart - eps_time
     config["tstop"] = grb_tstop + eps_time
     config["grb_duration"] = grb_duration
+    # Build the unbinned prepared product during preprocessing so localization
+    # can reuse it even if later tasks are run independently.
     config["prepared_data"] = {
         **dict(config.get("prepared_data", {})),
         **_build_prepared_event_data(config),
@@ -623,6 +650,8 @@ def unbinned_light_curve_generation(config_path: str) -> str:
     import astropy.units as u
 
     with fits.open(source_path, memmap=True) as hdul:
+        # Event directions are stored in Galactic coordinates; Phi is converted
+        # to degrees to match the ARM calculation below.
         data = hdul[1].data
         t_all = data[col_time].astype(np.float64)
         l_all = data[col_l].astype(np.float64)
@@ -643,6 +672,8 @@ def unbinned_light_curve_generation(config_path: str) -> str:
     n_total = int(t_all.size)
     n_time = int(t.size)
 
+    # ARM is the difference between the reconstructed event-source separation
+    # and the measured Compton scatter angle. The gate selects likely events.
     src = SkyCoord(l=l_deg * u.deg, b=b_deg * u.deg, frame="galactic")
     reco = SkyCoord(l=np.asarray(l_evt) * u.deg, b=np.asarray(b_evt) * u.deg, frame="galactic")
     arm = reco.separation(src).deg - np.asarray(phi_deg)
@@ -650,6 +681,7 @@ def unbinned_light_curve_generation(config_path: str) -> str:
     t_g = t[m_arm]
     n_gated = int(t_g.size)
 
+    # Histogram both all events and ARM-gated events for diagnostics.
     edges = np.arange(tstart, tstop + bin_size, bin_size, dtype=np.float64)
     centers = 0.5 * (edges[:-1] + edges[1:])
     counts_all, _ = np.histogram(t, bins=edges)
@@ -719,7 +751,7 @@ def unbinned_light_curve_generation(config_path: str) -> str:
             f"  ARM-gated: {n_gated}  (fraction {frac_gated:.3f})\n"
         )
         ax[1, 1].text(0.02, 0.98, text, va="top", ha="left", fontsize=10, family="monospace")
-        fig.suptitle(f"GRB time-series diagnostics — {out_prefix}", fontsize=14)
+        fig.suptitle(f"GRB time-series diagnostics - {out_prefix}", fontsize=14)
         fig.savefig(out_diag, dpi=plot_dpi, bbox_inches="tight")
         plt.close(fig)
 
@@ -829,6 +861,8 @@ def bin_data(config_path: str) -> tuple[str, str]:
         print(f"[bin_data:{label}] Binned file not found. Proceeding with binning process...")
         print(f"[bin_data:{label}] Creating binning configuration...")
 
+        # COSIpy expects a small YAML file describing how to transform the
+        # unbinned event list into a binned histogram product.
         binning_config = {
             "data_file": unbinned_file_path,
             "ori_file": bin_cfg.get("cosipy_ori_file", "NA"),
@@ -896,6 +930,8 @@ def bin_data(config_path: str) -> tuple[str, str]:
         "source_binned_file_path": source_binned_file_path,
         "background_binned_file_path": background_binned_file_path,
     }
+    # Persist a canonical aggregate/background pair consumed by TS map and
+    # light-curve stages.
     prepared_data = _build_prepared_binned_data(
         current_config,
         source_binned_file_path,
@@ -928,7 +964,7 @@ def bin_data(config_path: str) -> tuple[str, str]:
 
 
 # =============================================================================
-# Fast GRB localization (Li & Ma HEALPix map) — helpers (notebook logic)
+# Fast GRB localization (Li & Ma HEALPix map) - helpers (notebook logic)
 # =============================================================================
 def _fl_load_events_simple(
     fits_path: str,
@@ -952,6 +988,8 @@ def _fl_load_events_simple(
 def _fl_lb_to_unitvec(l_deg: np.ndarray, b_deg: np.ndarray) -> np.ndarray:
     import numpy as np
 
+    # Convert Galactic longitude/latitude into Cartesian unit vectors. This
+    # makes angular separations fast via dot products.
     ll = np.radians(np.asarray(l_deg, dtype=np.float64))
     bb = np.radians(np.asarray(b_deg, dtype=np.float64))
     cb = np.cos(bb)
@@ -997,6 +1035,8 @@ def _fl_angsep_deg(l1: float, b1: float, l2: float, b2: float) -> float:
 def _fl_li_ma(Non: np.ndarray, Noff: np.ndarray, alpha: float) -> np.ndarray:
     import numpy as np
 
+    # Li & Ma significance for ON/OFF counting statistics. Empty or invalid
+    # bins remain at zero to avoid log/division edge cases.
     Non = np.asarray(Non, dtype=np.float64)
     Noff = np.asarray(Noff, dtype=np.float64)
     alpha = float(alpha)
@@ -1027,9 +1067,12 @@ def _fl_count_arm_pass_for_pixels_chunked(
     m = svecs.shape[0]
     counts = np.zeros(m, dtype=np.int64)
     for j0 in range(0, n, event_chunk):
+        # Work in event chunks to limit the temporary event-by-pixel matrix.
         j1 = min(j0 + event_chunk, n)
         c = event_cvec[j0:j1]
         phi = event_phi_deg[j0:j1]
+        # Dot products give cos(theta) between each event direction and trial
+        # sky pixel; the ARM cut is applied for every trial pixel.
         dots = c @ svecs.T
         np.clip(dots, -1.0, 1.0, out=dots)
         alpha_deg = np.degrees(np.arccos(dots))
@@ -1060,6 +1103,7 @@ def _fl_build_significance_map(
     noff = np.zeros(npix, dtype=np.int64)
     svec_all = np.array(hp.pix2vec(nside, np.arange(npix))).T
     for i0 in range(0, npix, pix_chunk):
+        # Pixel chunks keep memory bounded while still vectorizing over events.
         i1 = min(i0 + pix_chunk, npix)
         svecs = svec_all[i0:i1]
         non_chunk = _fl_count_arm_pass_for_pixels_chunked(
@@ -1086,6 +1130,7 @@ def _fl_save_localization_csv(out_path: str, nside: int, sig_map: np.ndarray, to
     import healpy as hp
     import numpy as np
 
+    # Keep only the highest-significance pixels for compact downstream reports.
     idx = np.argsort(sig_map)[::-1][:topk]
     rows = []
     for ipix in idx:
@@ -1147,14 +1192,14 @@ def _fl_save_pretty_significance_map(
     if true_l is not None and true_b is not None:
         offset = _fl_angsep_deg(true_l, true_b, best_l, best_b)
     title = (
-        f"ARM-gated HEALPix Significance Map (NSIDE={nside}, mean spacing≈{mean_spacing:.2f}°)\n"
+        f"ARM-gated HEALPix Significance Map (NSIDE={nside}, mean spacing~{mean_spacing:.2f} deg)\n"
         f"ON=[{on_start:.3f},{on_stop:.3f}]  OFF=[{off_start:.3f},{off_stop:.3f}]  "
-        f"alpha={alpha:.3f}  ARM=[{arm_min:.1f},{arm_max:.1f}]°\n"
-        f"Max pixel significance: {best_s:.2f} σ"
-        + (f" | Offset = {offset:.2f}°" if offset is not None else "")
+        f"alpha={alpha:.3f}  ARM=[{arm_min:.1f},{arm_max:.1f}] deg\n"
+        f"Max pixel significance: {best_s:.2f} sigma"
+        + (f" | Offset = {offset:.2f} deg" if offset is not None else "")
     )
     plt.figure(figsize=tuple(figsize), dpi=int(dpi))
-    hp.mollview(sig_map, title=title, unit="σ", cmap="inferno")
+    hp.mollview(sig_map, title=title, unit="sigma", cmap="inferno")
     hp.graticule(color="white", alpha=0.35)
     best_lw = _fl_wrap_lon_deg(best_l)
     hp.projplot(best_lw, best_b, lonlat=True, marker="*", markersize=20, color="cyan", mec="black", mew=1.5)
@@ -1196,13 +1241,13 @@ def _fl_save_pretty_significance_map(
             ),
         )
         info = (
-            f"True:  (l,b)=({true_lw:.2f}°, {true_b:.2f}°)\n"
-            f"Reco: (l,b)=({best_lw:.2f}°, {best_b:.2f}°)\n"
-            f"S_max = {best_s:.2f} σ\n"
-            f"Offset = {offset:.2f}°"
+            f"True:  (l,b)=({true_lw:.2f} deg, {true_b:.2f} deg)\n"
+            f"Reco: (l,b)=({best_lw:.2f} deg, {best_b:.2f} deg)\n"
+            f"S_max = {best_s:.2f} sigma\n"
+            f"Offset = {offset:.2f} deg"
         )
     else:
-        info = f"Reco: (l,b)=({best_lw:.2f}°, {best_b:.2f}°)\n" f"S_max = {best_s:.2f} σ"
+        info = f"Reco: (l,b)=({best_lw:.2f} deg, {best_b:.2f} deg)\n" f"S_max = {best_s:.2f} sigma"
     ax = plt.gca()
     ax.legend(handles=legend_handles, loc="lower left", bbox_to_anchor=(0.02, -0.05), framealpha=0.92)
     ax.text(
@@ -1240,7 +1285,7 @@ def _fl_save_nside_table_png(
         "Area (sterad)",
         "Best l (deg)",
         "Best b (deg)",
-        "Smax (σ)",
+        "Smax (sigma)",
         "Offset (deg)",
         "Map time (s)",
     ]
@@ -1257,7 +1302,7 @@ def _fl_save_nside_table_png(
                 f"{bl:.2f}",
                 f"{bb:.2f}",
                 f"{bs:.2f}",
-                f"{off:.2f}" if np.isfinite(off) else "—",
+                f"{off:.2f}" if np.isfinite(off) else "-",
                 f"{tm:.2f}",
             ]
         )
@@ -1371,6 +1416,8 @@ def light_curve_analysis(config_path: str) -> str:
     t0_prep = time.perf_counter()
     prepared_event_path = dict(config.get("prepared_data", {})).get("event_data_path")
     if prepared_event_path and Path(prepared_event_path).is_file():
+        # Prefer the preprocessed HDF5 product when available. It preserves the
+        # exact ON/OFF windows used during preprocessing.
         import h5py
 
         with h5py.File(prepared_event_path, "r") as h5:
@@ -1390,6 +1437,7 @@ def light_curve_analysis(config_path: str) -> str:
             off_strategy_used = str(h5.attrs.get("off_strategy", "preburst"))
         t_io = time.perf_counter() - t0_io
     else:
+        # Fallback path for legacy configs that do not have prepared event data.
         t_grb, l_grb, b_grb, phi_grb = _fl_load_events_simple(
             source_path, col_time, col_l, col_b, col_phi, memmap=True
         )
@@ -1398,6 +1446,8 @@ def light_curve_analysis(config_path: str) -> str:
         )
         t_io = time.perf_counter() - t0_io
 
+        # Build ON from source+background in the burst window and OFF from
+        # background-only events before the burst.
         m_on_grb = (t_grb >= on_start) & (t_grb < on_stop)
         m_on_bkg = (t_bkg >= on_start) & (t_bkg < on_stop)
         on_l = np.concatenate([l_grb[m_on_grb], l_bkg[m_on_bkg]])
@@ -1440,6 +1490,8 @@ def light_curve_analysis(config_path: str) -> str:
     if off_l.size == 0:
         raise RuntimeError("No OFF events found for fast localization.")
 
+    # Store unit vectors instead of coordinates; skymap construction then only
+    # needs matrix products and avoids repeated coordinate conversion.
     on_cvec = _fl_lb_to_unitvec(on_l, on_b)
     off_cvec = _fl_lb_to_unitvec(off_l, off_bb)
     on_phi_deg = np.asarray(on_phi, dtype=np.float64)
@@ -1543,6 +1595,8 @@ def skymap_unbinned(config_path: str) -> str:
 
     prep_npz = fl.get("prep_npz")
     if not prep_npz:
+        # Recover the prep file path from either the stage YAML or the standard
+        # output filename so this task can be rerun from a partially updated config.
         prep_yaml = config.get("fast_localize_prep_yaml")
         if prep_yaml and Path(prep_yaml).is_file():
             prep_payload = fhf._load_yaml(str(prep_yaml))
@@ -1582,6 +1636,7 @@ def skymap_unbinned(config_path: str) -> str:
     best_for_main: tuple[int, np.ndarray, float, float, float] | None = None
 
     for nside in nsides:
+        # Each NSIDE produces a full Li & Ma map plus a compact metadata row.
         t0_map = time.perf_counter()
         sig_map, non_map, noff_map = _fl_build_significance_map(
             nside=nside,
@@ -1627,6 +1682,7 @@ def skymap_unbinned(config_path: str) -> str:
             ]
         )
 
+        # Persist the full map arrays separately from YAML to keep metadata files small.
         sig_npz = products_dir / f"{out_prefix}_sigmap_nside{nside}.npz"
         np.savez_compressed(sig_npz, sig=sig_map, non=non_map, noff=noff_map, nside=nside)
         per_nside.append(
@@ -1738,6 +1794,8 @@ def duration_and_localization_results(config_path: str) -> str:
     if not sig_path or not Path(sig_path).is_file():
         raise FileNotFoundError(f"Significance map npz for NSIDE={main_nside} not found.")
 
+    # The results stage reads the selected map and turns it into user-facing
+    # artifacts: top-K CSV, plots, timing table, and config coordinates.
     z = np.load(sig_path, allow_pickle=False)
     sig_map = z["sig"]
 
@@ -1815,6 +1873,7 @@ def duration_and_localization_results(config_path: str) -> str:
         out_tbl = None
 
     ulc = dict(config.get("unbinned_light_curve", {}))
+    # Feed the reconstructed location back into the unbinned light-curve stage.
     ulc["l"] = best_l
     ulc["b"] = best_b
     config["unbinned_light_curve"] = ulc
@@ -1826,6 +1885,7 @@ def duration_and_localization_results(config_path: str) -> str:
         config["tsmap"] = tsmap_merged
 
     if bool(fl.get("make_lc", False)):
+        # Optional compatibility hook for the standalone legacy time-series script.
         lc_script = str(fl.get("lc_script", "make_timeseries_all.py"))
         if Path(lc_script).is_file():
             lc_arm_min = arm_min if fl.get("lc_arm_min") is None else float(fl["lc_arm_min"])
@@ -1935,7 +1995,7 @@ def compute_ts_map(
     from mhealpy import HealpixMap
     from threeML import Powerlaw
 
-    # Define the spectrum
+    # Define the assumed source spectrum used by FastTSMap and MOCTSMap.
     spectrum_cfg = config.get("default_spectrum", {})
     spectrum = Powerlaw()
     spectrum.index.value = float(spectrum_cfg.get("index", -2.2))
@@ -1943,7 +2003,8 @@ def compute_ts_map(
     spectrum.piv.value = float(spectrum_cfg.get("piv", 100.0))
     spectrum.K.unit = u.Unit(spectrum_cfg.get("K_unit", "1 / (cm2 keV s)"))
     spectrum.piv.unit = u.Unit(spectrum_cfg.get("piv_unit", "keV"))
-    # Open the source data
+    # Prefer the canonical preprocessed aggregate; fall back to aggregating
+    # binned source/background products on demand for older configs.
     prepared_data = dict(config.get("prepared_data", {}))
     source_data_path = prepared_data.get("data_path")
     background_data_path = prepared_data.get("background_model_path")
@@ -1976,13 +2037,13 @@ def compute_ts_map(
     # Get the cpu cores
     cpu_cores = int(config.get("tsmap_cpu_cores", tsmap_cfg.get("cpu_cores", 8)))
 
-    # Open the orientation file
+    # Restrict spacecraft history to the same padded interval used by the map data.
     ori_full = SpacecraftHistory.open(config["orientation_path"])
     grb_ori = ori_full.select_interval(
         Time(map_tstart, format = "unix"), 
         Time(map_tstop, format = "unix"))
 
-    # Task 7.1 - FastTSMap
+    # FastTSMap evaluates a fixed-resolution HEALPix grid.
     fast = FastTSMap(
         data=data,
         bkg_model=bkg_model,
@@ -2008,7 +2069,7 @@ def compute_ts_map(
                 save_plot = True, save_dir = str(plots_dir),
                 save_name = fast_plot_name, dpi = plot_dpi)
 
-    # Task 7.2 - MOCTSMap
+    # MOCTSMap uses a multi-order map and reports the best UNIQ cell.
     moc = MOCTSMap(
         data=data,
         bkg_model=bkg_model,
@@ -2024,6 +2085,7 @@ def compute_ts_map(
     moc_idx = int(np.argmax(moc_ts))
     moc_max_ts = float(moc_ts[moc_idx])
     max_uniq = int(moc_uniq[moc_idx])
+    # Convert NUNIQ encoding back to the NSIDE/pixel pair used for coordinates.
     order = int(np.floor(np.log2(max_uniq / 4) / 2))
     moc_nside = 2 ** order
     moc_pix = int(max_uniq - 4 * moc_nside * moc_nside)
@@ -2121,6 +2183,7 @@ def light_curve(
     background_data_path = None
     using_prepared_aggregate = bool(source_data_path and Path(source_data_path).is_file())
     if not using_prepared_aggregate:
+        # Legacy mode: add source and background histograms at each time bin.
         source_data_path = config.get("source_binned_file_path", config["source_path"])
         background_data_path = config.get("background_binned_file_path", config["background_path"])
 
@@ -2167,6 +2230,8 @@ def light_curve(
         Returns:
             The mask.
         """
+        # Normalize each response slice and keep the highest-probability bins
+        # until the requested containment is reached.
         psr_sum = np.sum(psr_map, axis=-1, keepdims=True)
         psr_norm = np.divide(psr_map, psr_sum, out=np.zeros_like(psr_map), where=psr_sum != 0)
         sort_idx = np.argsort(psr_norm, axis=-1)[..., ::-1]
@@ -2191,6 +2256,7 @@ def light_curve(
             if window_stop <= edges[0] or window_start >= edges[-1]:
                 return np.zeros_like(mask_map, dtype=float)
 
+            # Translate physical time bounds into histogram bin indices.
             start_idx = int(np.searchsorted(edges, window_start, side="right") - 1)
             stop_idx = int(np.searchsorted(edges, window_stop, side="left"))
             start_idx = max(start_idx, 0)
@@ -2210,7 +2276,8 @@ def light_curve(
     signal_full = Histogram.open(source_data_path)
     bkg_full = None if using_prepared_aggregate else Histogram.open(background_data_path)
 
-    # Build the PSR map and the mask map
+    # Build the point-source response and a containment mask around the selected
+    # TS-map location.
     psr_map = _create_psr(
         lon,
         lat,
@@ -2237,6 +2304,7 @@ def light_curve(
     i = tstart - eps_preburst
     tend = tstop - bin_size + eps_postburst
     while i < tend:
+        # Sum masked counts in each time bin to form the GeD light curve.
         j = i + bin_size
         data_map = _load_data(signal_full, bkg_full, i, j)
         masked_data = mask_map * data_map
@@ -2333,6 +2401,7 @@ def duration(config_path: str) -> str:
     )
 
     if lightcurve_path:
+        # External duration inputs are usually stored as .npy/.npz arrays.
         if not os.path.exists(lightcurve_path):
             raise FileNotFoundError(f"Duration input lightcurve not found: {lightcurve_path}")
         loaded = np.load(lightcurve_path, allow_pickle=True)
@@ -2500,9 +2569,11 @@ def get_duration(
     for i, panel in enumerate(panels):
         y = data[:, i, 1]
         if isRate:
+            # BayesianBlocksLightcurve expects counts per bin, not rates.
             y = y * bin_width
         signal[panel] = y
 
+    # Reconstruct bin edges from bin centers for the GDT TimeBins object.
     bin_edges = np.zeros(len(time) + 1)
     bin_edges[1:-1] = (time[:-1] + time[1:]) / 2
     bin_edges[0] = time[0] - (time[1] - time[0]) / 2
@@ -2522,6 +2593,7 @@ def get_duration(
             "exposure": exposure.tolist(),
         }
 
+    # Use the panel with the strongest bin as the duration estimator input.
     best_panel = max(panels, key=lambda p: max(lc[p].counts))
     lc_sel = lc[best_panel]
 
