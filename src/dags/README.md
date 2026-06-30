@@ -30,7 +30,7 @@ It accepts Airflow trigger parameters:
 | `orientation_path` | Dropdown of orientation Wasabi keys; `__default__` uses the selected preset |
 | `source_path` | Dropdown of source/GRB Wasabi keys; `__default__` uses the selected preset |
 | `background_path` | Dropdown of background Wasabi keys; `__default__` uses the selected preset |
-| `destination` | One of `lcurve`, `tsmap`, `fast` |
+| `destination` | One of `lcurve`, `tsmap`, `fast`, `tdrss` |
 | `eps_time` | Background-cut time tolerance |
 
 Its task chain is:
@@ -46,6 +46,7 @@ The DAG writes products under:
 | `lcurve` | `/home/gamma/workspace/data/lcurve` |
 | `tsmap` | `/home/gamma/workspace/data/tsmap` |
 | `fast` | `/home/gamma/workspace/data/fast_localize_grb` |
+| `tdrss` | `/home/gamma/workspace/data/tdrss` |
 
 `init_pipelines` does not directly trigger downstream COSIDAGs. The downstream COSIDAGs monitor these output roots and pick up new `products/` folders.
 
