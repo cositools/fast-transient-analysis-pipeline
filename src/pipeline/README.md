@@ -20,6 +20,7 @@ For the Light Curve and TS Map workflows, the usual flow is:
    * `lcurve` writes staged products under `/home/gamma/workspace/data/lcurve`
    * `tsmap` writes staged products under `/home/gamma/workspace/data/tsmap`
    * `fast` writes staged products under `/home/gamma/workspace/data/fast_localize_grb`
+   * `tdrss` writes staged products under `/home/gamma/workspace/data/tdrss`
 4. The enabled COSIDAG discovers new `products/` folders through `monitoring_folders`.
 
 `init_pipelines` prepares and stages files, creates the run `products/` directory,
