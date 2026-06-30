@@ -87,6 +87,65 @@ These DAGs use `ExternalPythonOperator` and the module's fast GRB helper scripts
 
 Both branches use `ExternalPythonOperator` for implemented scientific steps and `EmptyOperator` for workflow placeholders.
 
+## Testing the GeD Branch
+
+The GeD test flow is:
+
+```text
+init_pipelines -> /home/gamma/workspace/data/tdrss/.../products -> cosidag_GeD
+```
+
+`init_pipelines` stages the simulator inputs and creates the `products/` folder.
+`cosidag_GeD` does not receive a direct Airflow trigger; it watches the `tdrss`
+output tree and starts when it finds a new `products/` folder with the expected
+files.
+
+Before testing, make sure the runtime pieces used by both DAGs are available:
+
+| Runtime piece | Used by | Expected path or image |
+| --- | --- | --- |
+| Module Docker image | `init_pipelines` Docker tasks | `fast-transient-analysis-pipeline:latest` |
+| Cosipy virtualenv | GeD COSIpy analysis tasks | `/home/gamma/envs/cosipy/bin/python` |
+| BCT virtualenv | GeD duration task | `/home/gamma/envs/bct/bin/python` |
+| Host workspace mount | Docker tasks | `HOST_WORKSPACE_PATH` in `cosiflow/env/docker-compose.yaml` |
+
+The default module installation may create only the Python environments,
+depending on `env/fta-pipe.config.yaml`. If the image
+`fast-transient-analysis-pipeline:latest` does not exist, build the module in
+container mode or `both` mode before running `init_pipelines`.
+
+To run the GeD branch from Airflow:
+
+1. In the Airflow UI, unpause `cosidag_GeD`.
+2. Trigger `init_pipelines`.
+3. Use these trigger parameters for a default GeD smoke test:
+
+   | Parameter | Value |
+   | --- | --- |
+   | `data_challenge` | `DC4` |
+   | `response_path` | `__default__` |
+   | `orientation_path` | `__default__` |
+   | `source_path` | `__default__` |
+   | `background_path` | `__default__` |
+   | `destination` | `tdrss` |
+   | `eps_time` | `1` |
+
+4. Wait for the full `init_pipelines` chain to succeed, especially
+   `background_cut`.
+5. Check that a new folder exists under:
+
+   ```text
+   /home/gamma/workspace/data/tdrss/YYYY_MM/YYMMDDXXX/products
+   ```
+
+6. `cosidag_GeD` should pick up that folder automatically and start from
+   `PreProcessing_GeD`.
+
+The `products/` folder must contain the staged GRB/source file, the background
+window file created by `background_cut`, the orientation file, and the response
+file. These are matched by `cosidag_GeD` as `grb_file`, `background_file`,
+`orientation_file`, and `response_file`.
+
 ## Shared COSIDAG Behavior
 
 Most COSIDAGs in this module use:
