@@ -1,0 +1,4 @@
+# Install with: pip install --no-deps -r requirements_bct_nodeps.txt
+# gbm-data-tools declares matplotlib<=3.2.1, while bctools/astro-gdt require matplotlib>=3.7.1.
+# The runtime stack uses the already-installed matplotlib from requirements_bct.txt.
+# https://fermi.gsfc.nasa.gov/ssc/data/analysis/gbm/gbm_data_tools/gbm_data_tools-1.1.1.tar.gz

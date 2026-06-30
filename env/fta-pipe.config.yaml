@@ -1,7 +1,8 @@
 # fta-pipe.config.yaml
 # Configuration file for Fast Transient Analysis Pipeline module installation using 
 #    cosipy Python virtual environment
-# This file must be placed in the module root directory (same level as src/, env/, etc.)
+# This file is stored in env/. hot_load_module.sh detects *.config.yaml files
+# both in the module root and in the module env/ directory.
 #
 # Usage examples:
 #   - Install with config: ./hot_load_module.sh <module> install
@@ -35,14 +36,22 @@ paths:
 # Python Virtual Environments
 # ==============================================================================
 environments:
-  # Environment 1: Stable cosipy environment
+  # Environment 1: Stable cosipy environment for GeD/COSIpy analysis tasks
   cosipy:
-    requirements: env/requirements.txt
-    requirements_no_deps: env/requirements_nodeps.txt
+    requirements: env/requirements_cosipy.txt
     venv_path: /home/gamma/envs/cosipy
     enabled: true
-    description: "Stable cosipy environment"
+    description: "Stable cosipy environment for GeD/COSIpy analysis"
     python_version: "3.12"
+
+  # Environment 2: BCT/GDT environment for Bayesian Blocks duration and BGO localization
+  bct:
+    requirements: env/requirements_bct.txt
+    requirements_no_deps: env/requirements_bct_nodeps.txt
+    venv_path: /home/gamma/envs/bct
+    enabled: true
+    description: "BCT/GDT environment for duration and BGO localization"
+    python_version: "3.11"
   
 # Default environment to use if none specified
 default_environment: cosipy

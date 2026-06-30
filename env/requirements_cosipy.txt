@@ -1,0 +1,25 @@
+# Runtime: Python 3.11
+# Python 3.11 is recommended for compatibility with the current scientific stack.
+# Rebuild the environment from scratch; do not install over the old environment.
+
+# Packaging compatibility: pkg_resources is still required by legacy dependencies.
+setuptools==80.9.0
+
+# Conservative scientific stack for COSIpy/threeML compatibility.
+numpy>=1.24,<2
+scipy>=1.10,<=1.15.3
+matplotlib>=3.7.1,<3.9
+pandas>=1.5,<3
+h5py>=3
+
+# Runtime utilities.
+psutil
+py7zr
+
+# Interactive tools. Move these to a separate dev file if the Airflow runtime
+# does not need notebooks.
+jupyter
+notebook
+
+# Pin to a commit SHA instead of develop once the validated revision is known.
+-e git+https://github.com/cositools/cosipy.git@develop#egg=cosipy
