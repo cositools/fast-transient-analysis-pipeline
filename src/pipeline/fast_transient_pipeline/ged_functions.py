@@ -1,28 +1,435 @@
-import numpy as np
-import matplotlib.pyplot as plt
-from pathlib import Path
-import os
-import subprocess
-import time
-import warnings
-import yaml
-from typing import Any
+from __future__ import annotations
 
-from matplotlib.lines import Line2D
 
-# TODO: standardize the path to the helper functions
-try:
-    from . import fast_helper_functions as fhf
-except ImportError:
-    import fast_helper_functions as fhf
+GED_ANALYSIS_DEFAULTS: dict[str, Any] = {
+    "unbinned_light_curve": {
+        "arm-min": -15.0,
+        "arm-max": 15.0,
+        "bin": 1.0,
+        "out-prefix": "lc",
+        "arm-hist-bins": 30,
+        "format": "png",
+        "diagnostics": True,
+        "col-time": "TimeTags",
+        "col-l": "Chi galactic",
+        "col-b": "Psi galactic",
+        "col-phi": "Phi",
+        "plot_figsize": [8, 4],
+        "diagnostics_figsize": [14, 10],
+        "plot_dpi": 200,
+    },
+    "default_spectrum": {
+        "index": -2.2,
+        "K": 10.0,
+        "K_unit": "1 / (cm2 keV s)",
+        "piv": 100.0,
+        "piv_unit": "keV",
+    },
+    "tsmap": {
+        "nside": 16,
+        "energy_channel": [2, 3],
+        "cpu_cores": 8,
+        "selected_method": "moc",
+        "selected_coordinates": {
+            "l_deg": 0,
+            "b_deg": 0,
+        },
+        "cds_frame": "local",
+        "map_scheme": "nested",
+        "coordsys": "galactic",
+        "fast_plot_name": "tsmap_fast.png",
+        "moc_plot_name": "tsmap_moc.png",
+        "plot_dpi": 300,
+    },
+    "binning_data": {
+        "bin_size": 1,
+        "eps_bkg_preburst": 20,
+        "eps_bkg_postburst": 20,
+        "nside": 16,
+        "cosipy_time_bins": 1,
+        "cosipy_energy_bins": [
+            100.0,
+            158.489,
+            251.189,
+            398.107,
+            630.957,
+            1000.0,
+            1584.89,
+            2511.89,
+            3981.07,
+            6309.57,
+            10000.0,
+        ],
+        "cosipy_phi_pix_size": 6,
+        "cosipy_nside": 8,
+        "cosipy_scheme": "ring",
+        "cosipy_psichi_binning": "local",
+        "cosipy_unbinned_output": "fits",
+        "cosipy_ori_file": "NA",
+    },
+    "light_curve": {
+        "bin_size": 1,
+        "nside": 16,
+        "containment": 0.5,
+        "plot_figsize": [10, 4],
+        "plot_dpi": 150,
+        "used_coordinates": {
+            "l_deg": 0,
+            "b_deg": 0,
+        },
+    },
+    "duration": {
+        "lightcurve_path": "",
+        "p0": 0.05,
+        "is_rate": False,
+        "panels": ["ged"],
+        "bayes_quantile": 0.9,
+        "bayes_error_nsamples": 100,
+        "sentinel_value": -9999.0,
+        "plot_figsize": [10, 4],
+        "plot_dpi": 150,
+    },
+    "fast_localize": {
+        "off_pre": 20.0,
+        "off_gap": 5.0,
+        "off_fallback_strategy": "on_background",
+        "arm_min": -13.0,
+        "arm_max": 13.0,
+        "nside": 32,
+        "nsides": None,
+        "pix_chunk": 256,
+        "event_chunk": 200000,
+        "topk": 50,
+        "out_prefix": "grb",
+        "true_l_deg": None,
+        "true_b_deg": None,
+        "suppress_mmap_warning": True,
+        "make_lc": False,
+        "lc_bin": 1.0,
+        "lc_arm_min": None,
+        "lc_arm_max": None,
+        "lc_diagnostics": False,
+        "lc_script": "make_timeseries_all.py",
+        "col_time": "TimeTags",
+        "col_l": "Chi galactic",
+        "col_b": "Psi galactic",
+        "col_phi": "Phi",
+        "map_plot_figsize": [10, 6],
+        "map_plot_dpi": 220,
+        "nside_table_figsize_width": 14,
+        "nside_table_figsize_base_height": 2.4,
+        "nside_table_figsize_row_height": 0.38,
+        "nside_table_dpi": 240,
+    },
+}
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any] | None) -> dict[str, Any]:
+    from copy import deepcopy
+
+    merged = deepcopy(base)
+    if not override:
+        return merged
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def _to_yaml_safe(value: Any) -> Any:
+    from pathlib import Path
+
+    import numpy as np
+
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _to_yaml_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_yaml_safe(v) for v in value]
+    return value
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_structured_pipeline_config(config: dict[str, Any]) -> dict[str, Any]:
+    pipeline_name = str(config.get("pipeline_name", "GeD"))
+    run_cfg = config.setdefault(pipeline_name, {})
+    run_cfg["name"] = config.get("cosidag_id", "cosidag_GeD")
+    run_cfg.setdefault("trigger_time", config.get("trigger_time", _now_iso()))
+    run_cfg["input_resolved"] = _to_yaml_safe(
+        config.get(
+            "input_resolved",
+            {
+                "source_path": config.get("source_path"),
+                "background_path": config.get("background_path"),
+                "orientation_path": config.get("orientation_path"),
+                "response_path": config.get("response_path"),
+            },
+        )
+    )
+    return run_cfg
+
+
+def _record_pipeline_task(
+    config: dict[str, Any],
+    task_id: str,
+    task_name: str,
+    input_data: dict[str, Any] | None = None,
+    output_data: dict[str, Any] | None = None,
+    status: str = "success",
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> None:
+    run_cfg = _ensure_structured_pipeline_config(config)
+    existing = run_cfg.get(task_id, {})
+    run_cfg[task_id] = {
+        "name": task_name,
+        "start-time": start_time or existing.get("start-time") or _now_iso(),
+        "input-data": _to_yaml_safe(input_data or existing.get("input-data", {})),
+        "status": status,
+        "end-time": end_time or _now_iso(),
+        "output-data": _to_yaml_safe(output_data or {}),
+    }
+
 
 def _ensure_pipeline_dirs(data_dir: str) -> tuple[Path, Path]:
+    from pathlib import Path
+
     base_dir = Path(data_dir)
     plots_dir = base_dir / ".." / "plots"
-    products_dir = base_dir / "products"
+    products_dir = base_dir
     plots_dir.mkdir(parents=True, exist_ok=True)
     products_dir.mkdir(parents=True, exist_ok=True)
     return plots_dir, products_dir
+
+
+def _is_fits_path(path: str) -> bool:
+    return str(path).lower().endswith((".fits", ".fits.gz", ".fit", ".fit.gz"))
+
+
+def _write_histogram(hist: Any, path: str) -> str:
+    from pathlib import Path
+
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        out.unlink()
+    try:
+        hist.write(str(out), overwrite=True)
+    except TypeError:
+        hist.write(str(out))
+    return str(out)
+
+
+def _prepared_time_window(config: dict[str, Any]) -> tuple[float, float]:
+    bin_cfg = dict(config.get("binning_data", {}))
+    eps_pre = float(bin_cfg.get("eps_bkg_preburst", 0.0))
+    eps_post = float(bin_cfg.get("eps_bkg_postburst", 0.0))
+    return float(config["tstart"]) - eps_pre, float(config["tstop"]) + eps_post
+
+
+def _build_prepared_event_data(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Persist the unbinned prepared event product used by the fast localization branch.
+
+    The file keeps the original source/background event columns and the prepared
+    aggregate ON sample plus OFF background sample. Downstream unbinned tasks can
+    use this product without re-reading and re-combining the raw FITS files.
+    """
+    from pathlib import Path
+    import time
+
+    import h5py
+    import numpy as np
+
+    source_path = str(config["source_path"])
+    background_path = str(config["background_path"])
+    if not (_is_fits_path(source_path) and _is_fits_path(background_path)):
+        return {
+            "event_data_status": "skipped",
+            "event_data_reason": "source/background inputs are not unbinned FITS files",
+            "source_path_original": source_path,
+            "background_path_original": background_path,
+        }
+
+    fl = dict(config.get("fast_localize", {}))
+    data_dir = config["data_dir"]
+    _, products_dir = _ensure_pipeline_dirs(data_dir)
+    event_data_path = Path(products_dir) / "ged_preprocessed_events.hdf5"
+
+    tstart = float(config["tstart"])
+    tstop = float(config["tstop"])
+    off_pre = float(fl.get("off_pre", 20.0))
+    off_gap = float(fl.get("off_gap", 5.0))
+    off_fallback_strategy = str(fl.get("off_fallback_strategy", "on_background"))
+    if tstart - off_gap <= tstart - off_pre:
+        raise ValueError(
+            "OFF window invalid while building prepared event data: need off_pre > off_gap. "
+            f"Got off_pre={off_pre}, off_gap={off_gap}."
+        )
+
+    col_time = str(fl.get("col_time", "TimeTags"))
+    col_l = str(fl.get("col_l", "Chi galactic"))
+    col_b = str(fl.get("col_b", "Psi galactic"))
+    col_phi = str(fl.get("col_phi", "Phi"))
+
+    t0 = time.perf_counter()
+    t_grb, l_grb, b_grb, phi_grb = _fl_load_events_simple(
+        source_path, col_time, col_l, col_b, col_phi, memmap=True
+    )
+    t_bkg, l_bkg, b_bkg, phi_bkg = _fl_load_events_simple(
+        background_path, col_time, col_l, col_b, col_phi, memmap=True
+    )
+
+    on_start, on_stop = tstart, tstop
+    off_start = tstart - off_pre
+    off_stop = tstart - off_gap
+    m_on_grb = (t_grb >= on_start) & (t_grb < on_stop)
+    m_on_bkg = (t_bkg >= on_start) & (t_bkg < on_stop)
+    m_off_bkg = (t_bkg >= off_start) & (t_bkg < off_stop)
+
+    on_t = np.concatenate([t_grb[m_on_grb], t_bkg[m_on_bkg]])
+    on_l = np.concatenate([l_grb[m_on_grb], l_bkg[m_on_bkg]])
+    on_b = np.concatenate([b_grb[m_on_grb], b_bkg[m_on_bkg]])
+    on_phi = np.concatenate([phi_grb[m_on_grb], phi_bkg[m_on_bkg]])
+    off_t = t_bkg[m_off_bkg]
+    off_l = l_bkg[m_off_bkg]
+    off_b = b_bkg[m_off_bkg]
+    off_phi = phi_bkg[m_off_bkg]
+    off_strategy_used = "preburst"
+
+    if on_l.size == 0:
+        raise RuntimeError("No ON events found while building prepared event data.")
+    if off_l.size == 0:
+        if off_fallback_strategy == "on_background" and np.any(m_on_bkg):
+            off_start, off_stop = on_start, on_stop
+            off_t = t_bkg[m_on_bkg]
+            off_l = l_bkg[m_on_bkg]
+            off_b = b_bkg[m_on_bkg]
+            off_phi = phi_bkg[m_on_bkg]
+            off_strategy_used = "on_background_fallback"
+        else:
+            raise RuntimeError(
+                "No OFF background events found while building prepared event data. "
+                f"Requested OFF=[{off_start}, {off_stop}], "
+                f"off_fallback_strategy={off_fallback_strategy!r}."
+            )
+
+    ton = on_stop - on_start
+    toff = off_stop - off_start
+    alpha = ton / toff
+    event_data_path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(event_data_path, "w") as h5:
+        h5.attrs["format"] = "hdf5"
+        h5.attrs["contains_background"] = True
+        h5.attrs["source_path_original"] = source_path
+        h5.attrs["background_path_original"] = background_path
+        h5.attrs["on_start"] = on_start
+        h5.attrs["on_stop"] = on_stop
+        h5.attrs["off_start"] = off_start
+        h5.attrs["off_stop"] = off_stop
+        h5.attrs["Ton_s"] = ton
+        h5.attrs["Toff_s"] = toff
+        h5.attrs["alpha"] = alpha
+        h5.attrs["off_strategy"] = off_strategy_used
+
+        def _write_event_group(group_name: str, t: np.ndarray, l: np.ndarray, b: np.ndarray, phi: np.ndarray) -> None:
+            group = h5.create_group(group_name)
+            group.create_dataset("time", data=np.asarray(t, dtype=np.float64), compression="gzip")
+            group.create_dataset("l_deg", data=np.asarray(l, dtype=np.float64), compression="gzip")
+            group.create_dataset("b_deg", data=np.asarray(b, dtype=np.float64), compression="gzip")
+            group.create_dataset("phi_deg", data=np.asarray(phi, dtype=np.float64), compression="gzip")
+
+        _write_event_group("source", t_grb, l_grb, b_grb, phi_grb)
+        _write_event_group("background", t_bkg, l_bkg, b_bkg, phi_bkg)
+        _write_event_group("aggregated_on", on_t, on_l, on_b, on_phi)
+        _write_event_group("background_off", off_t, off_l, off_b, off_phi)
+
+    return {
+        "event_data_status": "ok",
+        "event_data_path": str(event_data_path),
+        "event_format": "hdf5",
+        "contains_background": True,
+        "source_path_original": source_path,
+        "background_path_original": background_path,
+        "n_source_events": int(t_grb.size),
+        "n_background_events": int(t_bkg.size),
+        "n_on_events": int(on_l.size),
+        "n_off_events": int(off_l.size),
+        "windows": {
+            "on_start": on_start,
+            "on_stop": on_stop,
+            "off_start": off_start,
+            "off_stop": off_stop,
+            "Ton_s": ton,
+            "Toff_s": toff,
+            "alpha": alpha,
+            "off_strategy": off_strategy_used,
+        },
+        "timings_s": {"t_event_prepare": float(time.perf_counter() - t0)},
+    }
+
+
+def _build_prepared_binned_data(
+    config: dict[str, Any],
+    source_data_path: str,
+    background_data_path: str,
+) -> dict[str, Any]:
+    """
+    Persist the canonical binned prepared product: aggregated data and background model.
+    """
+    from pathlib import Path
+
+    try:
+        from . import fast_helper_functions as fhf
+    except ImportError:
+        import fast_helper_functions as fhf
+
+    data_dir = config["data_dir"]
+    _, products_dir = _ensure_pipeline_dirs(data_dir)
+    products_dir = Path(products_dir)
+    prepared_data_path = products_dir / "ged_preprocessed_data.hdf5"
+    background_model_path = products_dir / "ged_preprocessed_background_model.hdf5"
+
+    prepared_tstart, prepared_tstop = _prepared_time_window(config)
+    data, bkg_model = fhf.aggregate_data(
+        source_data_path,
+        background_data_path,
+        prepared_tstart,
+        prepared_tstop,
+    )
+    _write_histogram(data, str(prepared_data_path))
+    _write_histogram(bkg_model, str(background_model_path))
+
+    payload = {
+        "data_path": str(prepared_data_path),
+        "background_model_path": str(background_model_path),
+        "format": "hdf5",
+        "contains_background": True,
+        "source_path_original": config.get("source_path"),
+        "background_path_original": config.get("background_path"),
+        "source_data_path": source_data_path,
+        "background_data_path": background_data_path,
+        "tstart": prepared_tstart,
+        "tstop": prepared_tstop,
+        "burst_tstart": float(config["tstart"]),
+        "burst_tstop": float(config["tstop"]),
+    }
+    config["prepared_data"] = {**dict(config.get("prepared_data", {})), **payload}
+    config["aggregated_data_path"] = str(prepared_data_path)
+    config["background_model_path"] = str(background_model_path)
+    return payload
 
 #########################################################
 # TASK 1: Preprocessing
@@ -30,8 +437,7 @@ def _ensure_pipeline_dirs(data_dir: str) -> tuple[Path, Path]:
 #########################################################
 def preprocess_data(
     lightcurve,
-    eps_time: float = 0.000000001,
-):
+    eps_time: float = 0.000000001):
     """
     Preprocess the pipeline inputs and persist them in a YAML config.
 
@@ -39,12 +445,23 @@ def preprocess_data(
     - a dict containing input keys, or
     - a string path to an existing YAML file to enrich/normalize.
     """
+    from pathlib import Path
+
+    import fast_helper_functions as fhf
+
     if isinstance(lightcurve, str):
         config = fhf._load_yaml(lightcurve)
     elif isinstance(lightcurve, dict):
         config = dict(lightcurve)
     else:
         raise TypeError("preprocess_data expects a dict or a YAML path string")
+    analysis_config = _deep_merge(GED_ANALYSIS_DEFAULTS, config.get("analysis_config", {}))
+    config["analysis_config"] = analysis_config
+    for section, defaults in analysis_config.items():
+        if isinstance(defaults, dict):
+            config[section] = _deep_merge(defaults, config.get(section, {}))
+        else:
+            config.setdefault(section, defaults)
     # Required keys for the preprocessing
     required_keys = [
         "source_path",
@@ -56,7 +473,7 @@ def preprocess_data(
     if missing:
         raise ValueError(f"Missing required preprocessing fields: {missing}")
     # Data directory
-    default_data_dir = str(Path(config["source_path"]).resolve().parent)
+    default_data_dir = str(Path(config["source_path"]).parent)
     data_dir = config.get("data_dir", default_data_dir)
     plots_dir, products_dir = _ensure_pipeline_dirs(data_dir)
     # Define folders
@@ -66,108 +483,7 @@ def preprocess_data(
     # Emsure folders exist
     plots_dir.mkdir(parents=True, exist_ok=True)
     products_dir.mkdir(parents=True, exist_ok=True)
-    # ------------------------------------------------
-    # Default parameters for the Unbinned Light Curve
-    # -----------------------------------------------
-    config.setdefault(
-        "unbinned_light_curve",
-        {
-            "arm-min": -15.0,           # ARM gate min [deg].
-            "arm-max": 15.0,            # ARM gate max [deg].
-            "bin": 1.0,                 # Light curve bin size [s].
-            "out-prefix": "lc",         # Output prefix (no extension).
-            "arm-hist-bins": 30,        # Number of bins for ARM histogram in diagnostics figure.
-        },
-    )
-    #------------------------------------------------
-    # Default parameters for the TS map
-    #------------------------------------------------
-    nside = 16
-    config.setdefault(
-        # Default spectrum for the TS map
-        "default_spectrum",
-        {
-            "index": -2.2,               # Spectral index.
-            "K": 10.0,                   # Normalization factor.
-            "K_unit": "1 / (cm2 keV s)", # Normalization factor unit.
-            "piv": 100.0,                # Pivot energy.
-            "piv_unit": "keV",           # Pivot energy unit.
-        },
-    )
-    config.setdefault("tsmap", {
-        "nside": nside,
-        "energy_channel": [2, 3],
-        "cpu_cores": 8,
-        "selected_method": "moc",
-        "selected_coordinates": {
-            "l_deg": 0,
-            "b_deg": 0,
-        },
-    })
-    # ------------------------------------------------
-    # Default parameters for binning Data
-    #------------------------------------------------
-    config.setdefault(
-        "binning_data",
-        {
-            "bin_size": 1,
-            "eps_bkg_preburst": 20,
-            "eps_bkg_postburst": 20,
-            "nside": nside,
-        },
-    )
-    #------------------------------------------------
-    # Default parameters for the light curve
-    #------------------------------------------------
-    config.setdefault("light_curve", {
-        "bin_size": 1,
-        "nside": nside,
-        "used_coordinates": {
-            "l_deg": 0,
-            "b_deg": 0,
-        },
-    })
-    #------------------------------------------------
-    # Default parameters for the duration
-    #------------------------------------------------
-    config.setdefault(
-        "duration",
-        {
-            "lightcurve_path": "",
-            "p0": 0.05,
-            "is_rate": False,
-            "panels": ["ged"],
-        },
-    )
-    # Fast ARM-gated HEALPix localization (Li & Ma), YAML-driven reimplementation of fast_localize_grb.
-    config.setdefault(
-        "fast_localize",
-        {
-            "off_pre": 20.0,
-            "off_gap": 5.0,
-            "arm_min": -13.0,
-            "arm_max": 13.0,
-            "nside": 32,
-            "nsides": None,
-            "pix_chunk": 256,
-            "event_chunk": 200000,
-            "topk": 50,
-            "out_prefix": "grb",
-            "true_l_deg": None,
-            "true_b_deg": None,
-            "suppress_mmap_warning": True,
-            "make_lc": False,
-            "lc_bin": 1.0,
-            "lc_arm_min": None,
-            "lc_arm_max": None,
-            "lc_diagnostics": False,
-            "lc_script": "make_timeseries_all.py",
-            "col_time": "TimeTags",
-            "col_l": "Chi galactic",
-            "col_b": "Psi galactic",
-            "col_phi": "Phi",
-        },
-    )
+    nside = int(config["tsmap"].get("nside", 16))
     # Backward-compatible top-level aliases used by downstream tasks.
     config.setdefault("tsmap_nside", config["tsmap"].get("nside", nside))
     config.setdefault("tsmap_energy_channel", config["tsmap"].get("energy_channel", [2, 3]))
@@ -196,7 +512,35 @@ def preprocess_data(
     )
     config["tstart"] = grb_tstart - eps_time
     config["tstop"] = grb_tstop + eps_time
-    config["duration"] = grb_duration
+    config["grb_duration"] = grb_duration
+    config["prepared_data"] = {
+        **dict(config.get("prepared_data", {})),
+        **_build_prepared_event_data(config),
+    }
+
+    _ensure_structured_pipeline_config(config)
+    _record_pipeline_task(
+        config,
+        task_id="PreProcessing_GeD",
+        task_name="PreProcessing GeD",
+        input_data={
+            "source_path": config["source_path"],
+            "background_path": config["background_path"],
+            "orientation_path": config["orientation_path"],
+            "response_path": config["response_path"],
+            "eps_time": eps_time,
+            "analysis_config": analysis_config,
+        },
+        output_data={
+            "data_dir": config["data_dir"],
+            "plots_dir": config["plots_dir"],
+            "products_dir": config["products_dir"],
+            "tstart": config["tstart"],
+            "tstop": config["tstop"],
+            "grb_duration": config["grb_duration"],
+            "prepared_data": config.get("prepared_data", {}),
+        },
+    )
 
     config_path = config.get("config_path", str(products_dir / "pipeline_config.yaml"))
     fhf._save_yaml(config_path, config)
@@ -214,6 +558,17 @@ def unbinned_light_curve_generation(config_path: str) -> str:
     This is a YAML-driven reimplementation of fast_grb/fast_ops_grb_timeseries.py.
     It preserves the plotting/diagnostics logic while integrating with pipeline config.
     """
+    import os
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    try:
+        from . import fast_helper_functions as fhf
+    except ImportError:
+        import fast_helper_functions as fhf
+
+    task_start = _now_iso()
     config = fhf._load_yaml(config_path)
     if not config:
         raise ValueError(f"Empty or invalid config file: {config_path}")
@@ -250,6 +605,15 @@ def unbinned_light_curve_generation(config_path: str) -> str:
         }
         config["unbinned_light_curve"] = {**ulc_cfg, **payload}
         config["unbinned_lightcurve_yaml"] = str(products_dir / "unbinned_lightcurve_results.yaml")
+        _record_pipeline_task(
+            config,
+            task_id="Unbinned_Light_Curve_Generation",
+            task_name="Unbinned Light Curve Generation",
+            input_data={"config_path": config_path, **ulc_cfg},
+            output_data=payload,
+            status="skipped",
+            start_time=task_start,
+        )
         fhf._save_yaml(config["unbinned_lightcurve_yaml"], payload)
         fhf._save_yaml(config_path, config)
         return config["unbinned_lightcurve_yaml"]
@@ -301,19 +665,25 @@ def unbinned_light_curve_generation(config_path: str) -> str:
     )
 
     out_lc = os.path.join(plots_dir, f"{out_prefix}_lc.{fmt}")
-    plt.figure(figsize=(8, 4))
+    plt.figure(figsize=tuple(ulc_cfg.get("plot_figsize", [8, 4])))
     plt.step(centers, counts_gated, where="mid", color="k")
     plt.xlabel("Time [s]")
     plt.ylabel(f"Counts / {bin_size:.3f} s")
     plt.title(f"ARM-gated LC [{arm_min:.1f},{arm_max:.1f}] deg | l={l_deg:.3f}, b={b_deg:.3f}")
     plt.grid(True, ls="--", alpha=0.5)
-    plt.savefig(out_lc, dpi=200, bbox_inches="tight")
+    plot_dpi = int(ulc_cfg.get("plot_dpi", 200))
+    plt.savefig(out_lc, dpi=plot_dpi, bbox_inches="tight")
     plt.close()
 
     out_diag = None
     if diagnostics:
         out_diag = os.path.join(plots_dir, f"{out_prefix}_diagnostics.{fmt}")
-        fig, ax = plt.subplots(2, 2, figsize=(14, 10), constrained_layout=True)
+        fig, ax = plt.subplots(
+            2,
+            2,
+            figsize=tuple(ulc_cfg.get("diagnostics_figsize", [14, 10])),
+            constrained_layout=True,
+        )
         ax[0, 0].step(centers, counts_all, where="mid", color="black")
         ax[0, 0].set_title("Light curve (all events, time-windowed)")
         ax[0, 0].set_xlabel("Time [s]")
@@ -350,7 +720,7 @@ def unbinned_light_curve_generation(config_path: str) -> str:
         )
         ax[1, 1].text(0.02, 0.98, text, va="top", ha="left", fontsize=10, family="monospace")
         fig.suptitle(f"GRB time-series diagnostics — {out_prefix}", fontsize=14)
-        fig.savefig(out_diag, dpi=200, bbox_inches="tight")
+        fig.savefig(out_diag, dpi=plot_dpi, bbox_inches="tight")
         plt.close(fig)
 
     payload = {
@@ -373,6 +743,14 @@ def unbinned_light_curve_generation(config_path: str) -> str:
 
     config["unbinned_light_curve"] = {**ulc_cfg, **payload}
     config["unbinned_lightcurve_yaml"] = str(products_dir / "unbinned_lightcurve_results.yaml")
+    _record_pipeline_task(
+        config,
+        task_id="Unbinned_Light_Curve_Generation",
+        task_name="Unbinned Light Curve Generation",
+        input_data={"config_path": config_path, **ulc_cfg},
+        output_data=payload,
+        start_time=task_start,
+    )
     fhf._save_yaml(config["unbinned_lightcurve_yaml"], payload)
     fhf._save_yaml(config_path, config)
     return config["unbinned_lightcurve_yaml"]
@@ -382,9 +760,7 @@ def unbinned_light_curve_generation(config_path: str) -> str:
 # TASK 3: Binning
 # WIP: Implement the binning
 #########################################################
-def bin_data(
-    config_path: str,
-) -> tuple[str, str]:
+def bin_data(config_path: str) -> tuple[str, str]:
     """
     Bin source and background data with a single entrypoint.
     Returns (source_binned_file_path, background_binned_file_path).
@@ -392,13 +768,21 @@ def bin_data(
     Args:
         config_path: Path to the yaml configuration file.
     """
-    with open(config_path, "r") as f:
-        config = yaml.load(f, Loader=yaml.FullLoader)
+    import os
+
+    import yaml
+
+    import fast_helper_functions as fhf
+
+    task_start = _now_iso()
+    config = fhf._load_yaml(config_path)
 
     source_path = config["source_path"]
     background_path = config["background_path"]
-    tstart = config["tstart"]
-    tstop = config["tstop"]
+    burst_tstart = float(config["tstart"])
+    burst_tstop = float(config["tstop"])
+    tstart, tstop = _prepared_time_window(config)
+    bin_cfg = dict(config.get("binning_data", {}))
 
     from cosipy import BinnedData
 
@@ -420,12 +804,19 @@ def bin_data(
             tstart: Start time of the data.
             tstop: Stop time of the data.
         """
+        import math
+
         data_folder = os.path.dirname(unbinned_file_path)
 
         print(f"[bin_data:{label}] Found unbinned fits file: {unbinned_file_path}")
 
         extension = unbinned_file_path.split(".")[-1]
-        binned_file_name = unbinned_file_path.replace("_unbinned_", "_binned_").replace(f".{extension}", "")
+        window_tag = f"t{int(math.floor(float(tstart)))}_{int(math.ceil(float(tstop)))}"
+        binned_file_name = (
+            unbinned_file_path.replace("_unbinned_", "_binned_")
+            .replace(f".{extension}", "")
+            + f"_{window_tag}"
+        )
         binned_file_path = os.path.join(data_folder, f"{binned_file_name}.hdf5")
 
         print(f"[bin_data:{label}] Expected output file: {binned_file_path}")
@@ -438,22 +829,25 @@ def bin_data(
         print(f"[bin_data:{label}] Binned file not found. Proceeding with binning process...")
         print(f"[bin_data:{label}] Creating binning configuration...")
 
-        config = {
+        binning_config = {
             "data_file": unbinned_file_path,
-            "ori_file": "NA",
-            "unbinned_output": "fits",
-            "time_bins": 1,
-            "energy_bins": [100.0, 158.489, 251.189, 398.107, 630.957, 1000.0, 1584.89, 2511.89, 3981.07, 6309.57, 10000.0],
-            "phi_pix_size": 6,
-            "nside": 8,
-            "scheme": "ring",
-            "tstart": tstart,
-            "tstop": tstop,
+            "ori_file": bin_cfg.get("cosipy_ori_file", "NA"),
+            "unbinned_output": bin_cfg.get("cosipy_unbinned_output", "fits"),
+            "time_bins": bin_cfg.get("cosipy_time_bins", 1),
+            "energy_bins": bin_cfg.get(
+                "cosipy_energy_bins",
+                GED_ANALYSIS_DEFAULTS["binning_data"]["cosipy_energy_bins"],
+            ),
+            "phi_pix_size": bin_cfg.get("cosipy_phi_pix_size", 6),
+            "nside": bin_cfg.get("cosipy_nside", 8),
+            "scheme": bin_cfg.get("cosipy_scheme", "ring"),
+            "tmin": tstart,
+            "tmax": tstop,
         }
 
         inputs_path = os.path.join(data_folder, inputs_filename)
         with open(inputs_path, "w") as f:
-            yaml.dump(config, f, default_flow_style=False)
+            yaml.dump(binning_config, f, default_flow_style=False)
 
         print(f"[bin_data:{label}] Created binning configuration: {inputs_path}")
         print(f"[bin_data:{label}] Initializing COSIpy BinnedData analysis...")
@@ -464,7 +858,7 @@ def bin_data(
         analysis.get_binned_data(
             unbinned_data=unbinned_file_path,
             output_name=binned_file_name,
-            psichi_binning="local",
+            psichi_binning=bin_cfg.get("cosipy_psichi_binning", "local"),
         )
 
         print(f"[bin_data:{label}] Binning completed successfully")
@@ -478,6 +872,7 @@ def bin_data(
 
         return binned_file_path
 
+    # Bin source data
     source_binned_file_path = _bin_single_data(
         unbinned_file_path=source_path,
         label="source",
@@ -485,7 +880,7 @@ def bin_data(
         tstart=tstart,
         tstop=tstop,
     )
-
+    # Bin background data
     background_binned_file_path = _bin_single_data(
         unbinned_file_path=background_path,
         label="background",
@@ -493,7 +888,42 @@ def bin_data(
         tstart=tstart,
         tstop=tstop,
     )
-
+    # Update the config with the binned file paths and record the task
+    current_config = fhf._load_yaml(config_path)
+    current_config["source_binned_file_path"] = source_binned_file_path
+    current_config["background_binned_file_path"] = background_binned_file_path
+    current_config["binned_data"] = {
+        "source_binned_file_path": source_binned_file_path,
+        "background_binned_file_path": background_binned_file_path,
+    }
+    prepared_data = _build_prepared_binned_data(
+        current_config,
+        source_binned_file_path,
+        background_binned_file_path,
+    )
+    # Record the binning task in the pipeline config
+    _record_pipeline_task(
+        current_config,
+        task_id="Data_Binning",
+        task_name="Data Binning",
+        input_data={
+            "config_path": config_path,
+            "source_path": source_path,
+            "background_path": background_path,
+            "tstart": tstart,
+            "tstop": tstop,
+            "burst_tstart": burst_tstart,
+            "burst_tstop": burst_tstop,
+            **bin_cfg,
+        },
+        output_data={
+            "source_binned_file_path": source_binned_file_path,
+            "background_binned_file_path": background_binned_file_path,
+            "prepared_data": prepared_data,
+        },
+        start_time=task_start,
+    )
+    fhf._save_yaml(config_path, current_config)
     return source_binned_file_path, background_binned_file_path
 
 
@@ -506,8 +936,8 @@ def _fl_load_events_simple(
     col_l: str = "Chi galactic",
     col_b: str = "Psi galactic",
     col_phi: str = "Phi",
-    memmap: bool = True,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    memmap: bool = True) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    import numpy as np
     from astropy.io import fits
 
     with fits.open(fits_path, memmap=memmap) as hdul:
@@ -520,6 +950,8 @@ def _fl_load_events_simple(
 
 
 def _fl_lb_to_unitvec(l_deg: np.ndarray, b_deg: np.ndarray) -> np.ndarray:
+    import numpy as np
+
     ll = np.radians(np.asarray(l_deg, dtype=np.float64))
     bb = np.radians(np.asarray(b_deg, dtype=np.float64))
     cb = np.cos(bb)
@@ -530,16 +962,22 @@ def _fl_lb_to_unitvec(l_deg: np.ndarray, b_deg: np.ndarray) -> np.ndarray:
 
 
 def _fl_healpix_pixel_area_sr(nside: int) -> float:
+    import numpy as np
+
     return float(4.0 * np.pi / (12.0 * nside**2))
 
 
 def _fl_healpix_mean_spacing_deg(nside: int) -> float:
+    import numpy as np
+
     a_pix_sr = _fl_healpix_pixel_area_sr(nside)
     a_pix_deg2 = a_pix_sr * (180.0 / np.pi) ** 2
     return float(np.sqrt(a_pix_deg2))
 
 
 def _fl_healpix_res_from_nside(nside: int) -> int:
+    import numpy as np
+
     return int(np.round(np.log2(int(nside))))
 
 
@@ -548,6 +986,8 @@ def _fl_wrap_lon_deg(l_deg: float) -> float:
 
 
 def _fl_angsep_deg(l1: float, b1: float, l2: float, b2: float) -> float:
+    import numpy as np
+
     v1 = _fl_lb_to_unitvec(np.array([l1]), np.array([b1]))[0]
     v2 = _fl_lb_to_unitvec(np.array([l2]), np.array([b2]))[0]
     c = np.clip(np.dot(v1, v2), -1.0, 1.0)
@@ -555,6 +995,8 @@ def _fl_angsep_deg(l1: float, b1: float, l2: float, b2: float) -> float:
 
 
 def _fl_li_ma(Non: np.ndarray, Noff: np.ndarray, alpha: float) -> np.ndarray:
+    import numpy as np
+
     Non = np.asarray(Non, dtype=np.float64)
     Noff = np.asarray(Noff, dtype=np.float64)
     alpha = float(alpha)
@@ -578,8 +1020,9 @@ def _fl_count_arm_pass_for_pixels_chunked(
     svecs: np.ndarray,
     arm_min: float,
     arm_max: float,
-    event_chunk: int = 200_000,
-) -> np.ndarray:
+    event_chunk: int = 200_000) -> np.ndarray:
+    import numpy as np
+
     n = event_cvec.shape[0]
     m = svecs.shape[0]
     counts = np.zeros(m, dtype=np.int64)
@@ -607,9 +1050,9 @@ def _fl_build_significance_map(
     arm_max: float,
     alpha: float,
     pix_chunk: int = 256,
-    event_chunk: int = 200_000,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    event_chunk: int = 200_000) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     import healpy as hp
+    import numpy as np
 
     npix = hp.nside2npix(nside)
     sig = np.zeros(npix, dtype=np.float64)
@@ -641,6 +1084,7 @@ def _fl_parse_nsides(nsides_val: Any, default_nside: int) -> list[int]:
 
 def _fl_save_localization_csv(out_path: str, nside: int, sig_map: np.ndarray, topk: int = 50) -> str:
     import healpy as hp
+    import numpy as np
 
     idx = np.argsort(sig_map)[::-1][:topk]
     rows = []
@@ -655,6 +1099,8 @@ def _fl_save_localization_csv(out_path: str, nside: int, sig_map: np.ndarray, to
 
 
 def _fl_save_nside_summary_csv(out_path: str, rows: list[list[float]]) -> str:
+    import numpy as np
+
     header = (
         "Res,NSIDE,Npix,Mean_spacing_deg,Area_sr,Best_l_deg,Best_b_deg,Best_S_sigma,"
         "Offset_deg,Map_time_s"
@@ -665,6 +1111,8 @@ def _fl_save_nside_summary_csv(out_path: str, rows: list[list[float]]) -> str:
 
 
 def _fl_save_timing_csv(out_path: str, nside: int, t_io: float, t_prep: float, t_map: float, t_total: float) -> str:
+    import numpy as np
+
     header = "nside,t_io_s,t_prep_s,t_map_s,t_total_s"
     arr = np.array([[float(nside), float(t_io), float(t_prep), float(t_map), float(t_total)]], dtype=float)
     np.savetxt(out_path, arr, delimiter=",", header=header, comments="")
@@ -687,8 +1135,12 @@ def _fl_save_pretty_significance_map(
     best_s: float,
     true_l: float | None = None,
     true_b: float | None = None,
-) -> str:
+    figsize: list[float] | tuple[float, float] = (10, 6),
+    dpi: int = 220) -> str:
     import healpy as hp
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.lines import Line2D
 
     mean_spacing = _fl_healpix_mean_spacing_deg(nside)
     offset = None
@@ -701,7 +1153,7 @@ def _fl_save_pretty_significance_map(
         f"Max pixel significance: {best_s:.2f} σ"
         + (f" | Offset = {offset:.2f}°" if offset is not None else "")
     )
-    plt.figure(figsize=(10, 6), dpi=220)
+    plt.figure(figsize=tuple(figsize), dpi=int(dpi))
     hp.mollview(sig_map, title=title, unit="σ", cmap="inferno")
     hp.graticule(color="white", alpha=0.35)
     best_lw = _fl_wrap_lon_deg(best_l)
@@ -769,7 +1221,17 @@ def _fl_save_pretty_significance_map(
     return out_path
 
 
-def _fl_save_nside_table_png(out_path: str, rows: list[list[float]]) -> str:
+def _fl_save_nside_table_png(
+    out_path: str,
+    rows: list[list[float]],
+    figsize_width: float = 14,
+    figsize_base_height: float = 2.4,
+    figsize_row_height: float = 0.38,
+    dpi: int = 240,
+) -> str:
+    import matplotlib.pyplot as plt
+    import numpy as np
+
     col_labels = [
         "Res",
         "NSIDE",
@@ -799,7 +1261,10 @@ def _fl_save_nside_table_png(out_path: str, rows: list[list[float]]) -> str:
                 f"{tm:.2f}",
             ]
         )
-    fig, ax = plt.subplots(figsize=(14, 2.4 + 0.38 * max(len(disp), 1)), dpi=240)
+    fig, ax = plt.subplots(
+        figsize=(figsize_width, figsize_base_height + figsize_row_height * max(len(disp), 1)),
+        dpi=dpi,
+    )
     ax.axis("off")
     tbl = ax.table(cellText=disp, colLabels=col_labels, loc="center", cellLoc="center")
     tbl.auto_set_font_size(False)
@@ -829,8 +1294,16 @@ def light_curve_analysis(config_path: str) -> str:
 
     Returns the path to ``fast_localize_prep.yaml`` under products.
     """
+    from pathlib import Path
+    import time
+    import warnings
+
+    import numpy as np
     from astropy.utils.exceptions import AstropyWarning
 
+    import fast_helper_functions as fhf
+
+    task_start = _now_iso()
     config = fhf._load_yaml(config_path)
     if not config:
         raise ValueError(f"Empty or invalid config file: {config_path}")
@@ -853,6 +1326,15 @@ def light_curve_analysis(config_path: str) -> str:
             "source_path": source_path,
         }
         config["fast_localize"] = {**fl, **payload}
+        _record_pipeline_task(
+            config,
+            task_id="Light_Curve_Analysis",
+            task_name="Light Curve Analysis",
+            input_data={"config_path": config_path, **fl},
+            output_data=payload,
+            status="skipped",
+            start_time=task_start,
+        )
         fhf._save_yaml(str(prep_yaml), payload)
         fhf._save_yaml(config_path, config)
         return str(prep_yaml)
@@ -866,6 +1348,7 @@ def light_curve_analysis(config_path: str) -> str:
     tstop = float(config["tstop"])
     off_pre = float(fl.get("off_pre", 20.0))
     off_gap = float(fl.get("off_gap", 5.0))
+    off_fallback_strategy = str(fl.get("off_fallback_strategy", "on_background"))
     arm_min = float(fl.get("arm_min", -13.0))
     arm_max = float(fl.get("arm_max", 13.0))
 
@@ -873,10 +1356,11 @@ def light_curve_analysis(config_path: str) -> str:
     off_start = tstart - off_pre
     off_stop = tstart - off_gap
     if off_stop <= off_start:
-        raise ValueError("OFF window invalid: need off_pre > off_gap.")
+        raise ValueError(
+            "OFF window invalid: need off_pre > off_gap. "
+            f"Got off_pre={off_pre}, off_gap={off_gap}."
+        )
     ton = on_stop - on_start
-    toff = off_stop - off_start
-    alpha = ton / toff
 
     col_time = str(fl.get("col_time", "TimeTags"))
     col_l = str(fl.get("col_l", "Chi galactic"))
@@ -884,32 +1368,77 @@ def light_curve_analysis(config_path: str) -> str:
     col_phi = str(fl.get("col_phi", "Phi"))
 
     t0_io = time.perf_counter()
-    t_grb, l_grb, b_grb, phi_grb = _fl_load_events_simple(
-        source_path, col_time, col_l, col_b, col_phi, memmap=True
-    )
-    t_bkg, l_bkg, b_bkg, phi_bkg = _fl_load_events_simple(
-        background_path, col_time, col_l, col_b, col_phi, memmap=True
-    )
-    t_io = time.perf_counter() - t0_io
-
     t0_prep = time.perf_counter()
-    m_on_grb = (t_grb >= on_start) & (t_grb < on_stop)
-    m_on_bkg = (t_bkg >= on_start) & (t_bkg < on_stop)
-    on_l = np.concatenate([l_grb[m_on_grb], l_bkg[m_on_bkg]])
-    on_b = np.concatenate([b_grb[m_on_grb], b_bkg[m_on_bkg]])
-    on_phi = np.concatenate([phi_grb[m_on_grb], phi_bkg[m_on_bkg]])
+    prepared_event_path = dict(config.get("prepared_data", {})).get("event_data_path")
+    if prepared_event_path and Path(prepared_event_path).is_file():
+        import h5py
 
-    m_off_bkg = (t_bkg >= off_start) & (t_bkg < off_stop)
-    off_l = l_bkg[m_off_bkg]
-    off_bb = b_bkg[m_off_bkg]
-    off_phi = phi_bkg[m_off_bkg]
+        with h5py.File(prepared_event_path, "r") as h5:
+            on_l = np.asarray(h5["aggregated_on/l_deg"], dtype=np.float64)
+            on_b = np.asarray(h5["aggregated_on/b_deg"], dtype=np.float64)
+            on_phi = np.asarray(h5["aggregated_on/phi_deg"], dtype=np.float64)
+            off_l = np.asarray(h5["background_off/l_deg"], dtype=np.float64)
+            off_bb = np.asarray(h5["background_off/b_deg"], dtype=np.float64)
+            off_phi = np.asarray(h5["background_off/phi_deg"], dtype=np.float64)
+            on_start = float(h5.attrs.get("on_start", on_start))
+            on_stop = float(h5.attrs.get("on_stop", on_stop))
+            off_start = float(h5.attrs.get("off_start", off_start))
+            off_stop = float(h5.attrs.get("off_stop", off_stop))
+            ton = float(h5.attrs.get("Ton_s", on_stop - on_start))
+            toff = float(h5.attrs.get("Toff_s", off_stop - off_start))
+            alpha = float(h5.attrs.get("alpha", ton / toff))
+            off_strategy_used = str(h5.attrs.get("off_strategy", "preburst"))
+        t_io = time.perf_counter() - t0_io
+    else:
+        t_grb, l_grb, b_grb, phi_grb = _fl_load_events_simple(
+            source_path, col_time, col_l, col_b, col_phi, memmap=True
+        )
+        t_bkg, l_bkg, b_bkg, phi_bkg = _fl_load_events_simple(
+            background_path, col_time, col_l, col_b, col_phi, memmap=True
+        )
+        t_io = time.perf_counter() - t0_io
+
+        m_on_grb = (t_grb >= on_start) & (t_grb < on_stop)
+        m_on_bkg = (t_bkg >= on_start) & (t_bkg < on_stop)
+        on_l = np.concatenate([l_grb[m_on_grb], l_bkg[m_on_bkg]])
+        on_b = np.concatenate([b_grb[m_on_grb], b_bkg[m_on_bkg]])
+        on_phi = np.concatenate([phi_grb[m_on_grb], phi_bkg[m_on_bkg]])
+
+        m_off_bkg = (t_bkg >= off_start) & (t_bkg < off_stop)
+        off_l = l_bkg[m_off_bkg]
+        off_bb = b_bkg[m_off_bkg]
+        off_phi = phi_bkg[m_off_bkg]
+        off_strategy_used = "preburst"
+
+        if off_l.size == 0:
+            if off_fallback_strategy == "on_background" and np.any(m_on_bkg):
+                off_start, off_stop = on_start, on_stop
+                off_l = l_bkg[m_on_bkg]
+                off_bb = b_bkg[m_on_bkg]
+                off_phi = phi_bkg[m_on_bkg]
+                off_strategy_used = "on_background_fallback"
+                print(
+                    "[light_curve_analysis] No pre-burst OFF background events found. "
+                    "Using background events in the ON window as OFF sample "
+                    "(off_fallback_strategy='on_background')."
+                )
+            else:
+                bkg_min = float(np.min(t_bkg)) if t_bkg.size else None
+                bkg_max = float(np.max(t_bkg)) if t_bkg.size else None
+                raise RuntimeError(
+                    "No OFF background events found in [tmin-off_pre, tmin-off_gap]. "
+                    f"Requested OFF=[{off_start}, {off_stop}], "
+                    f"background time range=[{bkg_min}, {bkg_max}], "
+                    f"off_fallback_strategy={off_fallback_strategy!r}."
+                )
+
+        toff = off_stop - off_start
+        alpha = ton / toff
 
     if on_l.size == 0:
         raise RuntimeError("No ON events found in [tmin,tmax].")
     if off_l.size == 0:
-        raise RuntimeError(
-            "No OFF background events found in [tmin-off_pre, tmin-off_gap]."
-        )
+        raise RuntimeError("No OFF events found for fast localization.")
 
     on_cvec = _fl_lb_to_unitvec(on_l, on_b)
     off_cvec = _fl_lb_to_unitvec(off_l, off_bb)
@@ -937,6 +1466,7 @@ def light_curve_analysis(config_path: str) -> str:
             "Ton_s": ton,
             "Toff_s": toff,
             "alpha": alpha,
+            "off_strategy": off_strategy_used,
         },
         "arm_gate_deg": {"min": arm_min, "max": arm_max},
         "n_on_events": int(on_l.size),
@@ -945,9 +1475,18 @@ def light_curve_analysis(config_path: str) -> str:
         "wall_t0_unix": float(wall_t0),
         "source_path": source_path,
         "background_path": background_path,
+        "prepared_event_data_path": prepared_event_path,
     }
     config["fast_localize"] = {**fl, **payload}
     config["fast_localize_prep_yaml"] = str(prep_yaml)
+    _record_pipeline_task(
+        config,
+        task_id="Light_Curve_Analysis",
+        task_name="Light Curve Analysis",
+        input_data={"config_path": config_path, **fl},
+        output_data=payload,
+        start_time=task_start,
+    )
     fhf._save_yaml(str(prep_yaml), payload)
     fhf._save_yaml(config_path, config)
     return str(prep_yaml)
@@ -962,8 +1501,18 @@ def skymap_unbinned(config_path: str) -> str:
 
     Returns the path to ``fast_localize_skymap.yaml`` under products.
     """
-    import healpy as hp
+    from pathlib import Path
+    import time
 
+    import healpy as hp
+    import numpy as np
+
+    try:
+        from . import fast_helper_functions as fhf
+    except ImportError:
+        import fast_helper_functions as fhf
+
+    task_start = _now_iso()
     config = fhf._load_yaml(config_path)
     if not config:
         raise ValueError(f"Empty or invalid config file: {config_path}")
@@ -977,6 +1526,15 @@ def skymap_unbinned(config_path: str) -> str:
         out = products_dir / f"{fl.get('out_prefix', 'grb')}_fast_localize_skymap.yaml"
         p = {"status": "skipped", "reason": "fast_localize prep was skipped"}
         config["fast_localize_skymap_yaml"] = str(out)
+        _record_pipeline_task(
+            config,
+            task_id="Skymap_unbinned",
+            task_name="Skymap unbinned",
+            input_data={"config_path": config_path, **fl},
+            output_data=p,
+            status="skipped",
+            start_time=task_start,
+        )
         fhf._save_yaml(str(out), p)
         fhf._save_yaml(config_path, config)
         return str(out)
@@ -984,9 +1542,24 @@ def skymap_unbinned(config_path: str) -> str:
     skymap_yaml = products_dir / f"{out_prefix}_fast_localize_skymap.yaml"
 
     prep_npz = fl.get("prep_npz")
+    if not prep_npz:
+        prep_yaml = config.get("fast_localize_prep_yaml")
+        if prep_yaml and Path(prep_yaml).is_file():
+            prep_payload = fhf._load_yaml(str(prep_yaml))
+            prep_npz = prep_payload.get("prep_npz")
+            if prep_npz:
+                fl["prep_npz"] = prep_npz
+
+    if not prep_npz:
+        candidate_npz = products_dir / f"{out_prefix}_fast_localize_prep.npz"
+        if candidate_npz.is_file():
+            prep_npz = str(candidate_npz)
+            fl["prep_npz"] = prep_npz
+
     if not prep_npz or not Path(prep_npz).is_file():
         raise FileNotFoundError(
-            "Missing fast_localize prep .npz. Run light_curve_analysis first."
+            "Missing fast_localize prep .npz. Run light_curve_analysis first. "
+            f"Looked for config fast_localize.prep_npz and {products_dir / f'{out_prefix}_fast_localize_prep.npz'}."
         )
 
     z = np.load(prep_npz, allow_pickle=False)
@@ -1087,6 +1660,14 @@ def skymap_unbinned(config_path: str) -> str:
     }
     config["fast_localize"] = {**fl, **payload}
     config["fast_localize_skymap_yaml"] = str(skymap_yaml)
+    _record_pipeline_task(
+        config,
+        task_id="Skymap_unbinned",
+        task_name="Skymap unbinned",
+        input_data={"config_path": config_path, **fl},
+        output_data=payload,
+        start_time=task_start,
+    )
     fhf._save_yaml(str(skymap_yaml), payload)
     fhf._save_yaml(config_path, config)
     return str(skymap_yaml)
@@ -1103,8 +1684,19 @@ def duration_and_localization_results(config_path: str) -> str:
 
     Returns the path to ``fast_localize_results.yaml`` under products.
     """
-    import healpy as hp
+    from pathlib import Path
+    import subprocess
+    import time
 
+    import healpy as hp
+    import numpy as np
+
+    try:
+        from . import fast_helper_functions as fhf
+    except ImportError:
+        import fast_helper_functions as fhf
+
+    task_start = _now_iso()
     config = fhf._load_yaml(config_path)
     if not config:
         raise ValueError(f"Empty or invalid config file: {config_path}")
@@ -1120,6 +1712,15 @@ def duration_and_localization_results(config_path: str) -> str:
     if fl.get("status") == "skipped":
         p = {"status": "skipped"}
         config["fast_localize_results_yaml"] = str(results_yaml)
+        _record_pipeline_task(
+            config,
+            task_id="Duration_and_Localization_Results",
+            task_name="Duration and Localization Results",
+            input_data={"config_path": config_path, **fl},
+            output_data=p,
+            status="skipped",
+            start_time=task_start,
+        )
         fhf._save_yaml(str(results_yaml), p)
         fhf._save_yaml(config_path, config)
         return str(results_yaml)
@@ -1181,6 +1782,8 @@ def duration_and_localization_results(config_path: str) -> str:
         best_s,
         true_l=true_lf,
         true_b=true_bf,
+        figsize=fl.get("map_plot_figsize", [10, 6]),
+        dpi=int(fl.get("map_plot_dpi", 220)),
     )
 
     timings = fl.get("timings_s", {})
@@ -1199,7 +1802,14 @@ def duration_and_localization_results(config_path: str) -> str:
         out_sum = str(products_dir / f"{out_prefix}_nside_summary.csv")
         _fl_save_nside_summary_csv(out_sum, summary_rows)
         out_tbl = str(plots_dir / f"{out_prefix}_nside_summary.png")
-        _fl_save_nside_table_png(out_tbl, summary_rows)
+        _fl_save_nside_table_png(
+            out_tbl,
+            summary_rows,
+            figsize_width=float(fl.get("nside_table_figsize_width", 14)),
+            figsize_base_height=float(fl.get("nside_table_figsize_base_height", 2.4)),
+            figsize_row_height=float(fl.get("nside_table_figsize_row_height", 0.38)),
+            dpi=int(fl.get("nside_table_dpi", 240)),
+        )
     else:
         out_sum = None
         out_tbl = None
@@ -1226,9 +1836,9 @@ def duration_and_localization_results(config_path: str) -> str:
                 "--data",
                 str(config["source_path"]),
                 "--tmin",
-                str(config["tmin"]),
+                str(config["tstart"]),
                 "--tmax",
-                str(config["tmax"]),
+                str(config["tstop"]),
                 "--l",
                 str(best_l),
                 "--b",
@@ -1271,6 +1881,14 @@ def duration_and_localization_results(config_path: str) -> str:
     }
     config["fast_localize"] = {**fl, **results_payload}
     config["fast_localize_results_yaml"] = str(results_yaml)
+    _record_pipeline_task(
+        config,
+        task_id="Duration_and_Localization_Results",
+        task_name="Duration and Localization Results",
+        input_data={"config_path": config_path, **fl},
+        output_data=results_payload,
+        start_time=task_start,
+    )
     fhf._save_yaml(str(results_yaml), results_payload)
     fhf._save_yaml(config_path, config)
     return str(results_yaml)
@@ -1288,6 +1906,16 @@ def compute_ts_map(
     Args:
         config_path: Path to the yaml configuration file.
     """
+    from pathlib import Path
+
+    import numpy as np
+
+    try:
+        from . import fast_helper_functions as fhf
+    except ImportError:
+        import fast_helper_functions as fhf
+
+    task_start = _now_iso()
     config = fhf._load_yaml(config_path)
     if not config:
         raise ValueError(f"Empty or invalid config file: {config_path}")
@@ -1316,9 +1944,31 @@ def compute_ts_map(
     spectrum.K.unit = u.Unit(spectrum_cfg.get("K_unit", "1 / (cm2 keV s)"))
     spectrum.piv.unit = u.Unit(spectrum_cfg.get("piv_unit", "keV"))
     # Open the source data
-    data, bkg_model = fhf.aggregate_data(config["source_path"], config["background_path"], config["tstart"], config["tstop"])
+    prepared_data = dict(config.get("prepared_data", {}))
+    source_data_path = prepared_data.get("data_path")
+    background_data_path = prepared_data.get("background_model_path")
+    map_tstart = float(prepared_data.get("tstart", _prepared_time_window(config)[0]))
+    map_tstop = float(prepared_data.get("tstop", _prepared_time_window(config)[1]))
+    if (
+        source_data_path
+        and background_data_path
+        and Path(source_data_path).is_file()
+        and Path(background_data_path).is_file()
+    ):
+        data = Histogram.open(source_data_path)
+        bkg_model = Histogram.open(background_data_path)
+    else:
+        source_data_path = config.get("source_binned_file_path", config["source_path"])
+        background_data_path = config.get("background_binned_file_path", config["background_path"])
+        data, bkg_model = fhf.aggregate_data(source_data_path, background_data_path, map_tstart, map_tstop)
     # Get the tsmap configuration
     tsmap_cfg = config.get("tsmap", {})
+    cds_frame = str(tsmap_cfg.get("cds_frame", "local"))
+    map_scheme = str(tsmap_cfg.get("map_scheme", "nested"))
+    coordsys = str(tsmap_cfg.get("coordsys", "galactic"))
+    plot_dpi = int(tsmap_cfg.get("plot_dpi", 300))
+    fast_plot_name = str(tsmap_cfg.get("fast_plot_name", "tsmap_fast.png"))
+    moc_plot_name = str(tsmap_cfg.get("moc_plot_name", "tsmap_moc.png"))
     # Get the nside
     nside = int(config.get("tsmap_nside", tsmap_cfg.get("nside", 16)))
     # Get the energy channel
@@ -1329,8 +1979,8 @@ def compute_ts_map(
     # Open the orientation file
     ori_full = SpacecraftHistory.open(config["orientation_path"])
     grb_ori = ori_full.select_interval(
-        Time(config["tstart"], format = "unix"), 
-        Time(config["tstop"], format = "unix"))
+        Time(map_tstart, format = "unix"), 
+        Time(map_tstop, format = "unix"))
 
     # Task 7.1 - FastTSMap
     fast = FastTSMap(
@@ -1338,7 +1988,7 @@ def compute_ts_map(
         bkg_model=bkg_model,
         orientation=grb_ori,
         response_path=config["response_path"],
-        cds_frame="local",
+        cds_frame=cds_frame,
     )
     fast_ts = fast.fit(
         nside=nside,
@@ -1348,15 +1998,15 @@ def compute_ts_map(
     )
     fast_idx = int(np.argmax(fast_ts))
     fast_max_ts = float(np.max(fast_ts))
-    fast_map = HealpixMap(nside=nside, scheme="nested", coordsys="galactic")
+    fast_map = HealpixMap(nside=nside, scheme=map_scheme, coordsys=coordsys)
     fast_coo = fast_map.pix2skycoord(fast_idx)
     fast_l = float(fast_coo.l.value)
     fast_b = float(fast_coo.b.value)
     fast_coord = SkyCoord(l=fast_l, b=fast_b, unit=(u.deg, u.deg), frame="galactic")
-    fast_plot_path = plots_dir / "tsmap_fast.png"
+    fast_plot_path = plots_dir / fast_plot_name
     fast.plot_ts(fast_ts, skycoord=fast_coord, 
                 save_plot = True, save_dir = str(plots_dir),
-                save_name = "tsmap_fast.png", dpi = 300)
+                save_name = fast_plot_name, dpi = plot_dpi)
 
     # Task 7.2 - MOCTSMap
     moc = MOCTSMap(
@@ -1364,7 +2014,7 @@ def compute_ts_map(
         bkg_model=bkg_model,
         response_path=config["response_path"],
         orientation=grb_ori,
-        cds_frame="local",
+        cds_frame=cds_frame,
     )
     moc_ts, moc_uniq = moc.fit(
         max_nside=nside,
@@ -1377,15 +2027,15 @@ def compute_ts_map(
     order = int(np.floor(np.log2(max_uniq / 4) / 2))
     moc_nside = 2 ** order
     moc_pix = int(max_uniq - 4 * moc_nside * moc_nside)
-    moc_map = HealpixMap(nside=moc_nside, scheme="nested", coordsys="galactic")
+    moc_map = HealpixMap(nside=moc_nside, scheme=map_scheme, coordsys=coordsys)
     moc_coo = moc_map.pix2skycoord(moc_pix)
     moc_l = float(moc_coo.l.value)
     moc_b = float(moc_coo.b.value)
     moc_coord = SkyCoord(l=moc_l, b=moc_b, unit=(u.deg, u.deg), frame="galactic")
-    moc_plot_path = plots_dir / "tsmap_moc.png"
+    moc_plot_path = plots_dir / moc_plot_name
     MOCTSMap.plot_ts(moc_ts, moc_uniq, skycoord=moc_coord, 
                 save_plot = True, save_dir = str(plots_dir),
-                save_name = "tsmap_moc.png", dpi = 300)
+                save_name = moc_plot_name, dpi = plot_dpi)
 
     tsmap_payload = {
         "fast": {
@@ -1403,12 +2053,35 @@ def compute_ts_map(
             "nside": moc_nside,
             "pix": moc_pix,
         },
-        "selected_method": "moc",
+        "selected_method": tsmap_cfg.get("selected_method", "moc"),
         "selected_coordinates": {"l_deg": moc_l, "b_deg": moc_b},
+        "parameters": {
+            "source_data_path": source_data_path,
+            "background_data_path": background_data_path,
+            "tstart": map_tstart,
+            "tstop": map_tstop,
+            "burst_tstart": config["tstart"],
+            "burst_tstop": config["tstop"],
+            "nside": nside,
+            "energy_channel": energy_channel,
+            "cpu_cores": cpu_cores,
+            "cds_frame": cds_frame,
+            "map_scheme": map_scheme,
+            "coordsys": coordsys,
+            "plot_dpi": plot_dpi,
+        },
     }
     config["tsmap"] = tsmap_payload
     config["tsmap_yaml"] = str(products_dir / "tsmap_results.yaml")
 
+    _record_pipeline_task(
+        config,
+        task_id="TS_Map_on_different_timescales",
+        task_name="TS Map on different timescales",
+        input_data={"config_path": config_path, **tsmap_cfg},
+        output_data=tsmap_payload,
+        start_time=task_start,
+    )
     fhf._save_yaml(config["tsmap_yaml"], tsmap_payload)
     fhf._save_yaml(config_path, config)
     return config["tsmap_yaml"]
@@ -1426,12 +2099,30 @@ def light_curve(
     Args:
         config_path: Path to the yaml configuration file.
     """
+    from pathlib import Path
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    try:
+        from . import fast_helper_functions as fhf
+    except ImportError:
+        import fast_helper_functions as fhf
+
+    task_start = _now_iso()
     config = fhf._load_yaml(config_path)
     if not config:
         raise ValueError(f"Empty or invalid config file: {config_path}")
 
     data_dir = config["data_dir"]
     plots_dir, products_dir = _ensure_pipeline_dirs(data_dir)
+    prepared_data = dict(config.get("prepared_data", {}))
+    source_data_path = prepared_data.get("data_path")
+    background_data_path = None
+    using_prepared_aggregate = bool(source_data_path and Path(source_data_path).is_file())
+    if not using_prepared_aggregate:
+        source_data_path = config.get("source_binned_file_path", config["source_path"])
+        background_data_path = config.get("background_binned_file_path", config["background_path"])
 
     tsmap_cfg = config.get("tsmap", {})
     selected = tsmap_cfg.get("selected_coordinates", {})
@@ -1446,7 +2137,8 @@ def light_curve(
     from cosipy.response import FullDetectorResponse
     from histpy import Histogram
     
-    lightcurve_nside = int(config["light_curve"]["nside"])
+    lightcurve_cfg = dict(config["light_curve"])
+    lightcurve_nside = int(lightcurve_cfg["nside"])
 
     def _create_psr(l_deg: float, b_deg: float, ori_file: str, rsp_file: str, nside: int) -> np.ndarray:
         """
@@ -1475,7 +2167,8 @@ def light_curve(
         Returns:
             The mask.
         """
-        psr_norm = psr_map / np.sum(psr_map, axis=-1, keepdims=True)
+        psr_sum = np.sum(psr_map, axis=-1, keepdims=True)
+        psr_norm = np.divide(psr_map, psr_sum, out=np.zeros_like(psr_map), where=psr_sum != 0)
         sort_idx = np.argsort(psr_norm, axis=-1)[..., ::-1]
         sorted_vals = np.take_along_axis(psr_norm, sort_idx, axis=-1)
         cumsum_vals = np.cumsum(sorted_vals, axis=-1)
@@ -1484,7 +2177,7 @@ def light_curve(
         np.put_along_axis(mask, sort_idx, mask_sorted, axis=-1)
         return mask
 
-    def _load_data(signal_full: Histogram, bkg_full: Histogram, window_start: float, window_stop: float) -> np.ndarray:
+    def _load_data(signal_full: Histogram, bkg_full: Histogram | None, window_start: float, window_stop: float) -> np.ndarray:
         """
         Load the data from the signal and background files.
         Args:
@@ -1493,32 +2186,30 @@ def light_curve(
             window_start: Window start.
             window_stop: Window stop.
         """
-        def _time_to_index(edges, t):
-            # index of the left edge <= t (clipped to valid limits)
-            idx = np.searchsorted(edges, t, side="left")
-            idx = np.clip(idx, 0, len(edges) - 1)
-            return idx
-        bkg_edges = bkg_full.axes["Time"].edges.value
-        sig_edges = signal_full.axes["Time"].edges.value
+        def _project_window(hist: Histogram, window_start: float, window_stop: float) -> np.ndarray:
+            edges = hist.axes["Time"].edges.value
+            if window_stop <= edges[0] or window_start >= edges[-1]:
+                return np.zeros_like(mask_map, dtype=float)
 
-        # robust indices (no == comparison on float)
-        bkg_tmin_idx = _time_to_index(bkg_edges, window_start)
-        bkg_tmax_idx = _time_to_index(bkg_edges, window_stop)
+            start_idx = int(np.searchsorted(edges, window_start, side="right") - 1)
+            stop_idx = int(np.searchsorted(edges, window_stop, side="left"))
+            start_idx = max(start_idx, 0)
+            stop_idx = min(stop_idx, len(edges) - 1)
 
-        sig_tmin_idx = _time_to_index(sig_edges, window_start)
-        sig_tmax_idx = _time_to_index(sig_edges, window_stop)
+            if stop_idx <= start_idx:
+                return np.zeros_like(mask_map, dtype=float)
 
-        # ensure at least 1 bin
-        if bkg_tmax_idx <= bkg_tmin_idx:
-            bkg_tmax_idx = min(bkg_tmin_idx + 1, len(bkg_edges) - 1)
-        if sig_tmax_idx <= sig_tmin_idx:
-            sig_tmax_idx = min(sig_tmin_idx + 1, len(sig_edges) - 1)
+            return hist.slice[start_idx:stop_idx, :].project(["Em", "Phi", "PsiChi"]).contents
 
-        bkg = bkg_full.slice[bkg_tmin_idx:bkg_tmax_idx, :].project(["Em", "Phi", "PsiChi"])
-        signal = signal_full.slice[sig_tmin_idx:sig_tmax_idx, :].project(["Em", "Phi", "PsiChi"])
-
-        return (signal + bkg).contents
+        signal = _project_window(signal_full, window_start, window_stop)
+        if bkg_full is None:
+            return signal
+        bkg = _project_window(bkg_full, window_start, window_stop)
+        return signal + bkg
     
+    signal_full = Histogram.open(source_data_path)
+    bkg_full = None if using_prepared_aggregate else Histogram.open(background_data_path)
+
     # Build the PSR map and the mask map
     psr_map = _create_psr(
         lon,
@@ -1530,11 +2221,14 @@ def light_curve(
     # Project the PSR map and the mask map
     input_psr = psr_map.project(["Em", "Phi", "PsiChi"]).contents
     # Create the mask map
-    mask_map = _mask_from_cumdist_vectorized(input_psr, containment=0.5)
+    mask_map = _mask_from_cumdist_vectorized(
+        input_psr,
+        containment=float(lightcurve_cfg.get("containment", 0.5)),
+    )
     
     counts = []
     time_centers = []
-    bin_size = config["light_curve"]["bin_size"]
+    bin_size = lightcurve_cfg["bin_size"]
     eps_preburst = config["binning_data"]["eps_bkg_preburst"]
     eps_postburst = config["binning_data"]["eps_bkg_postburst"]
     tstart = config["tstart"]
@@ -1550,12 +2244,11 @@ def light_curve(
         time_centers.append(float((i + j) / 2.0))
         i = j
 
-    # Build bin edges
-    N = int(((config["tstop"] + 20) - (config["tstart"] - 20)) / bin_size)
-    bins = np.linspace(config["tstart"] - 20, config["tstop"] + 20, N + 1)
+    # Build bin edges aligned with the configured pre/post burst windows.
+    bins = np.arange(tstart - eps_preburst, tstop + eps_postburst + bin_size, bin_size)
 
-    plt.figure(figsize=(10, 4))
-    plt.step(bins, counts)
+    plt.figure(figsize=tuple(lightcurve_cfg.get("plot_figsize", [10, 4])))
+    plt.step(time_centers, counts, where="mid")
     plt.xlabel("Time (s)")
     plt.ylabel("Counts")
     plt.title(f"GRB light curve (bin = {bin_size}s)")
@@ -1563,20 +2256,33 @@ def light_curve(
 
     lightcurve_plot_path = plots_dir / "lightcurve.png"
     plt.tight_layout()
-    plt.savefig(lightcurve_plot_path, dpi=150)
+    plt.savefig(lightcurve_plot_path, dpi=int(lightcurve_cfg.get("plot_dpi", 150)))
     plt.close()
 
     lightcurve_payload = {
         "plot_path": str(lightcurve_plot_path),
         "bin_size": bin_size,
         "nside": lightcurve_nside,
-        "time_bins": bins,
+        "time_bins": bins.tolist(),
+        "time_centers": time_centers,
         "counts": counts,
         "used_coordinates": {"l_deg": lon, "b_deg": lat},
+        "containment": float(lightcurve_cfg.get("containment", 0.5)),
+        "source_data_path": source_data_path,
+        "background_data_path": background_data_path,
+        "using_prepared_aggregate": using_prepared_aggregate,
     }
     config["light_curve"] = lightcurve_payload
     config["lightcurve_yaml"] = str(products_dir / "lightcurve_results.yaml")
 
+    _record_pipeline_task(
+        config,
+        task_id="Light_Curve",
+        task_name="Light Curve",
+        input_data={"config_path": config_path, **lightcurve_cfg},
+        output_data=lightcurve_payload,
+        start_time=task_start,
+    )
     fhf._save_yaml(config["lightcurve_yaml"], lightcurve_payload)
     fhf._save_yaml(config_path, config)
     return config["lightcurve_yaml"]
@@ -1596,6 +2302,12 @@ def duration(config_path: str) -> str:
     Returns:
         Path to the duration yaml file.
     """
+    import os
+
+    import numpy as np
+    import fast_helper_functions as fhf
+
+    task_start = _now_iso()
     config = fhf._load_yaml(config_path)
     if not config:
         raise ValueError(f"Empty or invalid config file: {config_path}")
@@ -1611,6 +2323,8 @@ def duration(config_path: str) -> str:
 
     p0 = float(config.get("duration_p0", duration_cfg.get("p0", 0.05)))
     is_rate = bool(config.get("duration_is_rate", duration_cfg.get("is_rate", False)))
+    bayes_quantile = float(duration_cfg.get("bayes_quantile", 0.9))
+    bayes_error_nsamples = int(duration_cfg.get("bayes_error_nsamples", 100))
     panels = list(
         config.get(
             "duration_panels",
@@ -1665,18 +2379,39 @@ def duration(config_path: str) -> str:
         t90,
         t90_err_low,
         t90_err_high,
-    ) = get_duration(lightcurve=lightcurve, p0=p0, isRate=is_rate, panels=panels)
+    ) = get_duration(
+        lightcurve=lightcurve,
+        p0=p0,
+        isRate=is_rate,
+        panels=panels,
+        quantile=bayes_quantile,
+        error_nsamples=bayes_error_nsamples,
+        sentinel_value=float(duration_cfg.get("sentinel_value", -9999.0)),
+    )
 
     if bb_lc is not None and lc_sel is not None:
-        plot_duration(lc_sel, bb_lc, tstart, tstop, save_path=str(plots_dir / "duration_plot.png"))
+        plot_duration(
+            lc_sel,
+            bb_lc,
+            tstart,
+            tstop,
+            save_path=str(plots_dir / "duration_plot.png"),
+            figsize=duration_cfg.get("plot_figsize", [10, 4]),
+            dpi=int(duration_cfg.get("plot_dpi", 150)),
+        )
 
     duration_payload = {
         "input_lightcurve_path": lightcurve_path,
         "p0": p0,
         "is_rate": is_rate,
         "panels": panels,
+        "bayes_quantile": bayes_quantile,
+        "bayes_error_nsamples": bayes_error_nsamples,
         "lc_timebins": lc_timebins,
         "bb_lc_timebins": bb_lc_timebins,
+        "tstart_t90": float(tstart),
+        "tend_t90": float(tstop),
+        # Backward-compatible aliases scoped to the duration payload only.
         "tstart": float(tstart),
         "tstop": float(tstop),
         "t90": float(t90),
@@ -1691,12 +2426,20 @@ def duration(config_path: str) -> str:
     config["duration_p0"] = p0
     config["duration_is_rate"] = is_rate
     config["duration_panels"] = panels
-    config["tstart"] = float(tstart)
-    config["tstop"] = float(tstop)
+    config["tstart_t90"] = float(tstart)
+    config["tend_t90"] = float(tstop)
     config["t90"] = float(t90)
     config["t90_err_low"] = float(t90_err_low)
     config["t90_err_high"] = float(t90_err_high)
 
+    _record_pipeline_task(
+        config,
+        task_id="Duration",
+        task_name="Duration",
+        input_data={"config_path": config_path, **duration_cfg},
+        output_data=duration_payload,
+        start_time=task_start,
+    )
     fhf._save_yaml(config["duration_yaml"], duration_payload)
     fhf._save_yaml(config_path, config)
     return config["duration_yaml"]
@@ -1707,6 +2450,9 @@ def get_duration(
     p0: float = 0.05,
     isRate: bool = False,
     panels: list[str] = ["z0", "z1", "x0", "x1", "y0", "y1"],
+    quantile: float = 0.9,
+    error_nsamples: int = 100,
+    sentinel_value: float = -9999.0,
 ) -> tuple[
     Any, 
     Any, 
@@ -1716,8 +2462,7 @@ def get_duration(
     float, 
     float, 
     float, 
-    float
-]:
+    float]:
     """
     Analyze a multi-detector light curve and estimate T90 via Bayesian Blocks.
 
@@ -1726,6 +2471,9 @@ def get_duration(
         p0: False alarm probability for Bayesian Blocks.
         isRate: If True, the input signal is a rate (counts/s) and is converted to counts/bin.
         panels: List of panels to process.
+        quantile: Duration quantile passed to Bayesian Blocks.
+        error_nsamples: Number of samples for the Bayesian Blocks duration error.
+        sentinel_value: Value returned for scalar outputs when Bayesian Blocks fails.
 
     Returns:
         A tuple with the following elements:
@@ -1739,6 +2487,8 @@ def get_duration(
         - t90_error_low: Lower uncertainty estimate on T90.
         - t90_error_high: Upper uncertainty estimate on T90.
     """
+    import numpy as np
+
     from gdt.core.data_primitives import TimeBins
     from bctools.analysis import BayesianBlocksLightcurve
 
@@ -1775,31 +2525,87 @@ def get_duration(
     best_panel = max(panels, key=lambda p: max(lc[p].counts))
     lc_sel = lc[best_panel]
 
+    
     try:
         bb_lc = BayesianBlocksLightcurve(lc_sel)
         bb_lc.compute_bayesian_blocks(p0=p0)
+
         signal_range = bb_lc.signal_range
-        t90 = bb_lc.duration(quantile=0.9)
-        t90_error = bb_lc.duration_error(0.9, nsamples=100)
+        t90 = bb_lc.duration(quantile=quantile)
+
         bb_lc_timebins = {
             "lo_edges": bb_lc.bb_lightcurve.lo_edges.tolist(),
             "hi_edges": bb_lc.bb_lightcurve.hi_edges.tolist(),
             "rates": bb_lc.bb_lightcurve.rates.tolist(),
         }
-    except Exception as e:
-        print(e)
-        print("WARNING: Bayesian Blocks failed; returning sentinel values")
+
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        print(
+            "WARNING: Main Bayesian Blocks calculation failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
         return (
             None,
             None,
             lc_timebins,
             {},
-            -9999.0,
-            -9999.0,
-            -9999.0,
-            -9999.0,
-            -9999.0,
+            sentinel_value,
+            sentinel_value,
+            sentinel_value,
+            sentinel_value,
+            sentinel_value,
         )
+
+    try:
+        t90_error = bb_lc.duration_error(
+            quantile,
+            nsamples=error_nsamples,
+        )
+
+    except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
+        print(
+            "WARNING: T90 calculated successfully, but "
+            "duration_error failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+        t90_error = np.asarray(
+            [sentinel_value, sentinel_value],
+            dtype=float,
+        )
+
+    # try:
+    #     bb_lc = BayesianBlocksLightcurve(lc_sel)
+    #     bb_lc.compute_bayesian_blocks(p0=p0)
+    #     signal_range = bb_lc.signal_range
+    #     t90 = bb_lc.duration(quantile=quantile)
+    #     t90_error = bb_lc.duration_error(quantile, nsamples=error_nsamples)
+    #     bb_lc_timebins = {
+    #         "lo_edges": bb_lc.bb_lightcurve.lo_edges.tolist(),
+    #         "hi_edges": bb_lc.bb_lightcurve.hi_edges.tolist(),
+    #         "rates": bb_lc.bb_lightcurve.rates.tolist(),
+    #     }
+    # except Exception as e:
+    #     print(e)
+    #     print("WARNING: Bayesian Blocks failed; returning sentinel values")
+    #     return (
+    #         None,
+    #         None,
+    #         lc_timebins,
+    #         {},
+    #         sentinel_value,
+    #         sentinel_value,
+    #         sentinel_value,
+    #         sentinel_value,
+    #         sentinel_value,
+    #     )
 
     return (
         lc_sel,
@@ -1820,7 +2626,8 @@ def plot_duration(
     tstart, 
     tstop, 
     save_path = None,
-) -> None:
+    figsize: list[float] | tuple[float, float] = (10, 4),
+    dpi: int = 150) -> None:
     """
     Plot the duration of the source and background data.
 
@@ -1834,7 +2641,10 @@ def plot_duration(
     Returns:
         None
     """
-    plt.figure(figsize=(10,4))
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    plt.figure(figsize=tuple(figsize))
     plt.plot(lc_sel.centroids, bb_lc.bkg_counts/lc_sel.exposure, color = 'red', ls = ':',
                     label = "Fitted background")
     plt.errorbar(lc_sel.centroids, lc_sel.rates, xerr = [lc_sel.centroids-lc_sel.lo_edges, 
@@ -1857,7 +2667,7 @@ def plot_duration(
     plt.grid(True, alpha=0.3)
     # Save the plot
     if save_path:
-        plt.savefig(save_path, dpi=150)
+        plt.savefig(save_path, dpi=dpi)
     plt.close()
 
 #########################################################

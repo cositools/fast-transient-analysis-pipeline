@@ -21,7 +21,7 @@ def build_custom(dag):
     # 1. External interpreters + library dirs (same conventions as other DAGs)
     # ==============================================
     EXTERNAL_PYTHON_COSIPY = cfg("EXTERNAL_PYTHON_COSIPY", "/home/gamma/envs/cosipy/bin/python")
-    EXTERNAL_PYTHON_BGO    = cfg("EXTERNAL_PYTHON_BGO", "/home/gamma/envs/bct/bin/python")
+    EXTERNAL_PYTHON_BCT    = cfg("EXTERNAL_PYTHON_BCT", "/home/gamma/envs/bct/bin/python")
     LIB_DIR_FAST_TRANSIENT_PIPELINE = cfg(
         "FAST_GRB_LIB_DIR",
         "/home/gamma/airflow/pipeline/fast-transient-analysis-pipeline.cfmodule/fast_transient_pipeline",
@@ -36,6 +36,122 @@ def build_custom(dag):
     HARD_LUT = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='hard_lut_file') }}"
     ORIENTATION_FILE = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='orientation_file') }}"
     RESPONSE_FILE = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='response_file') }}"
+    TRIGGER_TIME = "{{ ts }}"
+    GED_ANALYSIS_CONFIG = {
+        "unbinned_light_curve": {
+            "arm-min": -15.0,
+            "arm-max": 15.0,
+            "bin": 1.0,
+            "out-prefix": "lc",
+            "arm-hist-bins": 30,
+            "format": "png",
+            "diagnostics": True,
+            "col-time": "TimeTags",
+            "col-l": "Chi galactic",
+            "col-b": "Psi galactic",
+            "col-phi": "Phi",
+            "plot_figsize": [8, 4],
+            "diagnostics_figsize": [14, 10],
+            "plot_dpi": 200,
+        },
+        "default_spectrum": {
+            "index": -2.2,
+            "K": 10.0,
+            "K_unit": "1 / (cm2 keV s)",
+            "piv": 100.0,
+            "piv_unit": "keV",
+        },
+        "tsmap": {
+            "nside": 16,
+            "energy_channel": [2, 3],
+            "cpu_cores": 8,
+            "selected_method": "moc",
+            "selected_coordinates": {"l_deg": 0, "b_deg": 0},
+            "cds_frame": "local",
+            "map_scheme": "nested",
+            "coordsys": "galactic",
+            "fast_plot_name": "tsmap_fast.png",
+            "moc_plot_name": "tsmap_moc.png",
+            "plot_dpi": 300,
+        },
+        "binning_data": {
+            "bin_size": 1,
+            "eps_bkg_preburst": 20,
+            "eps_bkg_postburst": 20,
+            "nside": 16,
+            "cosipy_time_bins": 1,
+            "cosipy_energy_bins": [
+                100.0,
+                158.489,
+                251.189,
+                398.107,
+                630.957,
+                1000.0,
+                1584.89,
+                2511.89,
+                3981.07,
+                6309.57,
+                10000.0,
+            ],
+            "cosipy_phi_pix_size": 6,
+            "cosipy_nside": 8,
+            "cosipy_scheme": "ring",
+            "cosipy_psichi_binning": "local",
+            "cosipy_unbinned_output": "fits",
+            "cosipy_ori_file": "NA",
+        },
+        "light_curve": {
+            "bin_size": 1,
+            "nside": 16,
+            "containment": 0.5,
+            "plot_figsize": [10, 4],
+            "plot_dpi": 150,
+            "used_coordinates": {"l_deg": 0, "b_deg": 0},
+        },
+        "duration": {
+            "lightcurve_path": "",
+            "p0": 0.05,
+            "is_rate": False,
+            "panels": ["ged"],
+            "bayes_quantile": 0.9,
+            "bayes_error_nsamples": 100,
+            "sentinel_value": -9999.0,
+            "plot_figsize": [10, 4],
+            "plot_dpi": 150,
+        },
+        "fast_localize": {
+            "off_pre": 20.0,
+            "off_gap": 5.0,
+            "off_fallback_strategy": "on_background",
+            "arm_min": -13.0,
+            "arm_max": 13.0,
+            "nside": 32,
+            "nsides": None,
+            "pix_chunk": 256,
+            "event_chunk": 200000,
+            "topk": 50,
+            "out_prefix": "grb",
+            "true_l_deg": None,
+            "true_b_deg": None,
+            "suppress_mmap_warning": True,
+            "make_lc": False,
+            "lc_bin": 1.0,
+            "lc_arm_min": None,
+            "lc_arm_max": None,
+            "lc_diagnostics": False,
+            "lc_script": "make_timeseries_all.py",
+            "col_time": "TimeTags",
+            "col_l": "Chi galactic",
+            "col_b": "Psi galactic",
+            "col_phi": "Phi",
+            "map_plot_figsize": [10, 6],
+            "map_plot_dpi": 220,
+            "nside_table_figsize_width": 14,
+            "nside_table_figsize_base_height": 2.4,
+            "nside_table_figsize_row_height": 0.38,
+            "nside_table_dpi": 240,
+        },
+    }
     # ==============================================
     # 3. External callables
     # ==============================================
@@ -46,6 +162,8 @@ def build_custom(dag):
         background_file: str,
         orientation_file: str,
         response_file: str,
+        analysis_config: dict,
+        trigger_time: str,
     ):
         import os
         import sys
@@ -66,13 +184,23 @@ def build_custom(dag):
             )
 
         sys.path.insert(0, lib_dir)
-        from deg_functions import preprocess_data
+        from ged_functions import preprocess_data
 
         payload = {
             "source_path": source_file,
             "background_path": background_file,
             "orientation_path": orientation_file,
             "response_path": response_file,
+            "pipeline_name": "GeD",
+            "cosidag_id": "cosidag_GeD",
+            "trigger_time": trigger_time,
+            "analysis_config": analysis_config,
+            "input_resolved": {
+                "source_path": source_file,
+                "background_path": background_file,
+                "orientation_path": orientation_file,
+                "response_path": response_file,
+            },
         }
         return preprocess_data(payload)
 
@@ -85,7 +213,7 @@ def build_custom(dag):
             raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
 
         sys.path.insert(0, lib_dir)
-        from deg_functions import unbinned_light_curve_generation
+        from ged_functions import unbinned_light_curve_generation
 
         return unbinned_light_curve_generation(config_path)
 
@@ -101,10 +229,40 @@ def build_custom(dag):
         with open(config_path, "r") as f:
             config = yaml.load(f, Loader=yaml.FullLoader) or {}
 
+        sys.path.insert(0, lib_dir)
+        from ged_functions import _record_pipeline_task
+        from ged_functions import _build_prepared_binned_data
+
         source_path = str(config.get("source_path", ""))
         background_path = str(config.get("background_path", ""))
         if source_path.endswith(".hdf5") and background_path.endswith(".hdf5"):
             print("[Data_Binning] Input files are already binned (.hdf5). Skipping binning.")
+            config["source_binned_file_path"] = source_path
+            config["background_binned_file_path"] = background_path
+            config["binned_data"] = {
+                "source_binned_file_path": source_path,
+                "background_binned_file_path": background_path,
+            }
+            prepared_data = _build_prepared_binned_data(config, source_path, background_path)
+            _record_pipeline_task(
+                config,
+                task_id="Data_Binning",
+                task_name="Data Binning",
+                input_data={
+                    "config_path": config_path,
+                    "source_path": source_path,
+                    "background_path": background_path,
+                },
+                output_data={
+                    "source_binned_file_path": source_path,
+                    "background_binned_file_path": background_path,
+                    "skipped_binning": True,
+                    "prepared_data": prepared_data,
+                },
+                status="skipped",
+            )
+            with open(config_path, "w") as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
             return {
                 "source_binned_file_path": source_path,
                 "background_binned_file_path": background_path,
@@ -112,16 +270,9 @@ def build_custom(dag):
                 "skipped_binning": True,
             }
 
-        sys.path.insert(0, lib_dir)
-        from deg_functions import bin_data
+        from ged_functions import bin_data
 
         source_binned_file_path, background_binned_file_path = bin_data(config_path)
-
-        # Keep config aligned with downstream tasks expecting binned inputs.
-        config["source_path"] = source_binned_file_path
-        config["background_path"] = background_binned_file_path
-        with open(config_path, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
         return {
             "source_binned_file_path": source_binned_file_path,
@@ -139,7 +290,7 @@ def build_custom(dag):
             raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
 
         sys.path.insert(0, lib_dir)
-        from deg_functions import compute_ts_map
+        from ged_functions import compute_ts_map
 
         return compute_ts_map(config_path)
 
@@ -152,7 +303,7 @@ def build_custom(dag):
             raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
 
         sys.path.insert(0, lib_dir)
-        from deg_functions import light_curve
+        from ged_functions import light_curve
 
         return light_curve(config_path)
 
@@ -165,7 +316,7 @@ def build_custom(dag):
             raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
 
         sys.path.insert(0, lib_dir)
-        from deg_functions import duration
+        from ged_functions import duration
 
         return duration(config_path)
 
@@ -177,7 +328,7 @@ def build_custom(dag):
             raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
 
         sys.path.insert(0, lib_dir)
-        from deg_functions import light_curve_analysis
+        from ged_functions import light_curve_analysis
 
         return light_curve_analysis(config_path)
 
@@ -189,7 +340,7 @@ def build_custom(dag):
             raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
 
         sys.path.insert(0, lib_dir)
-        from deg_functions import skymap_unbinned
+        from ged_functions import skymap_unbinned
 
         return skymap_unbinned(config_path)
 
@@ -201,7 +352,7 @@ def build_custom(dag):
             raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
 
         sys.path.insert(0, lib_dir)
-        from deg_functions import duration_and_localization_results
+        from ged_functions import duration_and_localization_results
 
         return duration_and_localization_results(config_path)
 
@@ -219,6 +370,8 @@ def build_custom(dag):
             "background_file": BACKGROUND_FILE,
             "orientation_file": ORIENTATION_FILE,
             "response_file": RESPONSE_FILE,
+            "analysis_config": GED_ANALYSIS_CONFIG,
+            "trigger_time": TRIGGER_TIME,
         },
         dag=dag,
     )
@@ -305,7 +458,7 @@ def build_custom(dag):
     # Node 8. Duration
     ged_duration = ExternalPythonOperator(
         task_id="Duration",
-        python=EXTERNAL_PYTHON_BGO,
+        python=EXTERNAL_PYTHON_BCT,
         python_callable=_run_duration,
         op_kwargs={
             "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
@@ -352,7 +505,7 @@ with COSIDAG(
         # Fast transient inputs
 #        # Support both production-style unbinned FITS and tutorial/classic binned HDF5.
         "grb_file": "*[Gg][Rr][Bb]*.fits*",
-        "background_file": "*[Bb][Gg]*.fits*",
+        "background_file": "*[Bb][Gg]*_window.fits*",
 #        "background_window_file": "Total_BG*_unbinned_*_window.fits*",
 #        "orientation_file": "*.fits*",
 #        "response_file": "*.h5",

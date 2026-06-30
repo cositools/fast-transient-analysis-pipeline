@@ -37,7 +37,7 @@ Functions:
 from histpy import Histogram
 import numpy as np
 import yaml
-from typing import Any
+from typing import Any, Optional
 
 
 def _load_yaml(path: str) -> dict[str, Any]:
@@ -93,9 +93,10 @@ def load_background_data(background_path: str) -> tuple[Histogram, np.ndarray]:
 
 #########################################################
 
+# Optional output typing for python 3.9 and below
 def _infer_time_bounds_from_fits(
     source_path: str
-) -> tuple[float, float, float] | None:
+) -> Optional[tuple[float, float, float]]:
     """
     Infer (tmin, tmax) from the source FITS event file.
     """
