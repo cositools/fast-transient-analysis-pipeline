@@ -406,7 +406,11 @@ with DAG(
             description="Wasabi background key. Use __default__ for the selected Data Challenge preset.",
         ),
         "destination": Param(default="tsmap", enum=list(DEST_MAP.keys())),  
-        "eps_time": Param(default=1e-9, type="number"),
+        "eps_time": Param(
+            default=1, 
+            type="number",
+            description="Time in seconds for the pre and post-burst background cut around the source time " \
+                        "window. Default is 1 second.",),
     },
 ) as dag:
 

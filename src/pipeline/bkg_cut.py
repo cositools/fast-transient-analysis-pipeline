@@ -42,13 +42,12 @@ def get_times_source(source_path):
     return grb_tmin, grb_tmax, grb_duration
 
 # === 4. Extract background window ===
-def extract_bkg_window(background_path, source_path, eps_time = 0.000000001):
+def extract_bkg_window(background_path, source_path, eps_time = 1):
     """Extract the background window from the background file. 
        The eps_time is the adding time in seconds to add before and after the source time 
        to extract the background. It is a safety margin to avoid edge effects.
        
-       i.e. if the source time is from 100 to 200 seconds, and eps_time is 1 second, 
-       with eps_time = 1e-9
+       i.e. if the source time is from 100 to 200 seconds, and eps_time is 1 second
        """
     bkg_full = open_background(background_path)
     grb_tmin, grb_tmax, _ = get_times_source(source_path)
