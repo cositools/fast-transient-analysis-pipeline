@@ -51,7 +51,8 @@ RAW_SUBDIRS = {
 DEST_MAP = {
     "lcurve": Path("/home/gamma/workspace/data/lcurve"),
     "tsmap": Path("/home/gamma/workspace/data/tsmap"),
-    "fast": Path("/home/gamma/workspace/data/fast_localize_grb")
+    "fast": Path("/home/gamma/workspace/data/fast_localize_grb"),
+    "tdrss": Path("/home/gamma/workspace/data/tdrss"),
 }
 
 AUTO_INPUT = "__default__"
