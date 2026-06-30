@@ -112,10 +112,14 @@ BRANCH_COSIFLOW="container_arch"
 # 1. Download the cosiflow repository
 # ==============================================
 cd $COSI_PATH
-git clone https://github.com/cositools/cosiflow.git
-# checkout the default branch for the cosiflow repository
-cd $COSI_PATH/cosiflow
-git checkout $BRANCH_COSIFLOW
+if [ ! -d "$COSI_PATH/cosiflow" ]; then
+    git clone https://github.com/cositools/cosiflow.git
+    # checkout the default branch for the cosiflow repository
+    cd $COSI_PATH/cosiflow
+    git checkout $BRANCH_COSIFLOW
+else
+    log "Cosiflow repository already cloned"
+fi
 # ==============================================
 # 2. Modify permissions in the compose file
 # ==============================================
