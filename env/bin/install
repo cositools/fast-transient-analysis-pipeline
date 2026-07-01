@@ -106,7 +106,7 @@ if [ -z "$COSI_PATH" ]; then
 fi
 
 # default branch for the cosiflow repository
-BRANCH_COSIFLOW="container_arch"
+BRANCH_COSIFLOW="v0.1.0"
 
 # ==============================================
 # 1. Download the cosiflow repository
@@ -186,12 +186,12 @@ read -p "Press Enter to continue"
 # 7. Run the hot_load_module.sh script for preparing the fast-transient-analysis-pipeline module in 
 #    the cosiflow environment in python virtual environment mode
 # ==============================================
-# Modify the configuration file for the fast-transient-analysis-pipeline module to run in python virtual environment mode
-run_sed "s/install_mode: [^}]*/install_mode: environment/" "$COSI_PATH/fast-transient-analysis-pipeline/env/fta-pipe.config.yaml" || error "Failed to update install_mode in fta-pipe.config.yaml"
-# log the modified configuration file
-log "Configuration file modified with install_mode: environment"
-# ask to user to press Enter to continue
-read -p "Press Enter to continue"
+# # Modify the configuration file for the fast-transient-analysis-pipeline module to run in python virtual environment mode
+# run_sed "s/install_mode: [^}]*/install_mode: environment/" "$COSI_PATH/fast-transient-analysis-pipeline/env/fta-pipe.config.yaml" || error "Failed to update install_mode in fta-pipe.config.yaml"
+# # log the modified configuration file
+# log "Configuration file modified with install_mode: environment"
+# # ask to user to press Enter to continue
+# read -p "Press Enter to continue"
 # Run the hot_load_module.sh script for preparing the fast-transient-analysis-pipeline module in 
 #    the cosiflow environment in python virtual environment mode
 cd "$COSI_PATH/cosiflow/env" || error "Failed to cd to $COSI_PATH/cosiflow/env"

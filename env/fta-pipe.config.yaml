@@ -16,7 +16,7 @@
 #   - "environment": Only create Python virtual environments (equivalent to -e flag)
 #   - "both": Build Docker image AND create environments (equivalent to -a flag)
 #   - "none": Skip installation (only link DAGs and pipeline)
-install_mode: environment
+install_mode: both
 
 # ==============================================================================
 # Paths Configuration
@@ -47,7 +47,7 @@ environments:
   # Environment 2: BCT/GDT environment for Bayesian Blocks duration and BGO localization
   bct:
     requirements: env/requirements_bct.txt
-    requirements_no_deps: env/requirements_bct_nodeps.txt
+    #requirements_no_deps: env/requirements_bct_nodeps.txt
     venv_path: /home/gamma/envs/bct
     enabled: true
     description: "BCT/GDT environment for duration and BGO localization"

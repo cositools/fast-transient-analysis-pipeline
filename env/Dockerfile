@@ -1,10 +1,11 @@
 # =============================================================================
 #  Dockerfile — Runtime Container for FAST Pipeline
-#  Base: Python 3.10 Slim (Debian)
+#  Base: Python 3.12 Slim (Debian)
 #  Description: Lightweight container for executing scientific scripts with cosipy
 # =============================================================================
 
-FROM python:3.10-slim
+# FROM python:3.10-slim
+FROM python:3.12-slim
 
 # ------------------------------ System Dependencies ------------------------------
 # Install minimal libraries required for scientific packages (HDF5, GSL, compilers)
@@ -40,11 +41,11 @@ WORKDIR /home/gamma
 
 # --- Environment: cosipy (Stable) ---
 RUN python -m venv /home/gamma/envs/cosipy
-COPY --chown=gamma:gamma requirements.txt /home/gamma/requirements.txt
+COPY --chown=gamma:gamma requirements_cosipy.txt /home/gamma/requirements_cosipy.txt
 # Activate env to install packages
 RUN . /home/gamma/envs/cosipy/bin/activate && \
     python -m pip install --upgrade pip && \
-    pip install -r /home/gamma/requirements.txt
+    pip install -r /home/gamma/requirements_cosipy.txt
 
 # ------------------------------ Default Configuration ------------------------------
 # Default to the stable environment
