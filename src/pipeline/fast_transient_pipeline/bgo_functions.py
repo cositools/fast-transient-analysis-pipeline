@@ -6,13 +6,184 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import os
 import math
+from typing import Any
 
 #########################################################
 # TASK 1: Preprocessing
 #########################################################
+BGO_ANALYSIS_DEFAULTS: dict[str, Any] = {
+    "duration": {
+        "lightcurve_key": "light_curve",
+        "p0": 10e-5,
+        "is_rate": False,
+        "panels": ["z0", "z1", "x0", "x1", "y0", "y1"],
+    },
+    "background": {
+        "buffer": 0.0,
+        "order": 2,
+    },
+    "light_curve": {
+        "panel": None,
+        "show": False,
+    },
+    "significance": {
+        "min_signal_counts": 10,
+        "min_background_counts": 10,
+    },
+    "localization_bctools": {
+        "nside": 64,
+        "counts_order": ["BGO_X0", "BGO_X1", "BGO_Y0", "BGO_Y1", "BGO_Z0", "BGO_Z1"],
+        "output_plot_name": "bgo_localization.png",
+    },
+}
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any] | None) -> dict[str, Any]:
+    from copy import deepcopy
+
+    merged = deepcopy(base)
+    if not override:
+        return merged
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def _to_yaml_safe(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _to_yaml_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_yaml_safe(v) for v in value]
+    return value
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_structured_pipeline_config(config: dict[str, Any]) -> dict[str, Any]:
+    pipeline_name = str(config.get("pipeline_name", "BGO"))
+    run_cfg = config.setdefault(pipeline_name, {})
+    run_cfg["name"] = config.get("cosidag_id", "cosidag_BGO")
+    run_cfg.setdefault("trigger_time", config.get("trigger_time", _now_iso()))
+    run_cfg["input_resolved"] = _to_yaml_safe(
+        config.get(
+            "input_resolved",
+            {
+                "lightcurve_path": config.get("lightcurve_path"),
+                "soft_lut_path": config.get("soft_lut_path"),
+                "medium_lut_path": config.get("medium_lut_path"),
+                "hard_lut_path": config.get("hard_lut_path"),
+                "orientation_path": config.get("orientation_path"),
+            },
+        )
+    )
+    return run_cfg
+
+
+def _record_pipeline_task(
+    config: dict[str, Any],
+    task_id: str,
+    task_name: str,
+    input_data: dict[str, Any] | None = None,
+    output_data: dict[str, Any] | None = None,
+    status: str = "success",
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> None:
+    run_cfg = _ensure_structured_pipeline_config(config)
+    existing = run_cfg.get(task_id, {})
+    run_cfg[task_id] = {
+        "name": task_name,
+        "start-time": start_time or existing.get("start-time") or _now_iso(),
+        "input-data": _to_yaml_safe(input_data or existing.get("input-data", {})),
+        "status": status,
+        "end-time": end_time or _now_iso(),
+        "output-data": _to_yaml_safe(output_data or {}),
+    }
+
+
+def _ensure_pipeline_dirs(data_dir: str) -> tuple[Path, Path]:
+    base_dir = Path(data_dir)
+    plots_dir = base_dir / ".." / "plots"
+    products_dir = base_dir
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    products_dir.mkdir(parents=True, exist_ok=True)
+    return plots_dir, products_dir
+
+
 def preprocess_data(lightcurve):
-    """Preprocess the data"""
-    raise NotImplementedError("Not implemented yet")
+    """Preprocess BGO inputs and persist the shared YAML pipeline config."""
+    import fast_helper_functions as fhf
+
+    if isinstance(lightcurve, str):
+        config = fhf._load_yaml(lightcurve)
+    elif isinstance(lightcurve, dict):
+        config = dict(lightcurve)
+    else:
+        raise TypeError("preprocess_data expects a dict or a YAML path string")
+
+    analysis_config = _deep_merge(BGO_ANALYSIS_DEFAULTS, config.get("analysis_config", {}))
+    config["analysis_config"] = analysis_config
+    for section, defaults in analysis_config.items():
+        if isinstance(defaults, dict):
+            config[section] = _deep_merge(defaults, config.get(section, {}))
+        else:
+            config.setdefault(section, defaults)
+
+    lightcurve_path = config.get("lightcurve_path") or config.get("lightcurve_file")
+    if not lightcurve_path:
+        raise ValueError("Missing required preprocessing field: lightcurve_path")
+    if not os.path.exists(lightcurve_path):
+        raise FileNotFoundError(f"lightcurve_file not found or missing from resolve_inputs: {lightcurve_path}")
+
+    config["lightcurve_path"] = str(lightcurve_path)
+    config["lightcurve_file"] = str(lightcurve_path)
+    default_data_dir = str(Path(lightcurve_path).parent)
+    data_dir = config.get("data_dir", default_data_dir)
+    plots_dir, products_dir = _ensure_pipeline_dirs(data_dir)
+    config["data_dir"] = str(Path(data_dir))
+    config["plots_dir"] = str(plots_dir)
+    config["products_dir"] = str(products_dir)
+
+    config.setdefault("duration_p0", config["duration"].get("p0", 10e-5))
+    config.setdefault("duration_is_rate", config["duration"].get("is_rate", False))
+    config.setdefault("duration_panels", config["duration"].get("panels", ["z0", "z1", "x0", "x1", "y0", "y1"]))
+
+    _ensure_structured_pipeline_config(config)
+    _record_pipeline_task(
+        config,
+        task_id="PreProcessing_BGO",
+        task_name="PreProcessing BGO",
+        input_data={
+            "lightcurve_path": config.get("lightcurve_path"),
+            "soft_lut_path": config.get("soft_lut_path"),
+            "medium_lut_path": config.get("medium_lut_path"),
+            "hard_lut_path": config.get("hard_lut_path"),
+            "orientation_path": config.get("orientation_path"),
+            "analysis_config": analysis_config,
+        },
+        output_data={
+            "data_dir": config["data_dir"],
+            "plots_dir": config["plots_dir"],
+            "products_dir": config["products_dir"],
+        },
+    )
+
+    config_path = config.get("config_path", str(products_dir / "pipeline_config.yaml"))
+    fhf._save_yaml(config_path, config)
+    return config_path
 
 #########################################################
 # TASK 2: Duration on different binning (Bayesian Blocks)
@@ -601,11 +772,99 @@ def localize_bctools(
     Run BGO localization with BC tools.
     Counts order: ['BGO_X0','BGO_X1','BGO_Y0','BGO_Y1','BGO_Z0','BGO_Z1'].
     """
-    from cosipy.nonimaging.bgo.bc_tools_localization import BGOLocalizerBCT
+    from cosipy.nonimaging.bgo.ACSLocalizerBCT import ACSLocalizerBCT
     import numpy as np
     from astropy.coordinates import SkyCoord
     import astropy.units as u
+    from bctools.loc import NormLocLike, TSMap
     from scoords import Attitude
+
+    def _attitude_from_orientation_file(path: str, time_grb: float):
+        lower_path = str(path).lower()
+        if lower_path.endswith((".fits", ".fit", ".fits.gz", ".fit.gz")):
+            from astropy.io import fits
+
+            with fits.open(path, memmap=True) as hdul:
+                table = hdul[1].data
+                times_col = np.asarray(table["TimeStamp"], dtype=float)
+                idx = int(np.argmin(np.abs(times_col - float(time_grb))))
+                x_l_deg, x_b_deg = [float(value) for value in table["XPointings"][idx]]
+                z_l_deg, z_b_deg = [float(value) for value in table["ZPointings"][idx]]
+
+            print("Nearest index:", idx)
+            print("Nearest time:", times_col[idx])
+            print("Nearest X pointing (l, b):", x_l_deg, x_b_deg)
+            print("Nearest Z pointing (l, b):", z_l_deg, z_b_deg)
+            x_pointing = SkyCoord(x_l_deg * u.deg, x_b_deg * u.deg, frame="galactic")
+            z_pointing = SkyCoord(z_l_deg * u.deg, z_b_deg * u.deg, frame="galactic")
+            return Attitude.from_axes(x=x_pointing, z=z_pointing, frame="galactic")
+
+        data = np.loadtxt(
+            path,
+            usecols=(1, 2, 3, 4, 5, 6, 7, 8),
+            delimiter=" ",
+            skiprows=1,
+            comments=("#", "EN"),
+        )
+        times_col = data[:, 0]
+        idx = int(np.argmin(np.abs(times_col - float(time_grb))))
+        nearest_row = data[idx]
+        print("Nearest index:", idx)
+        print("Nearest time:", times_col[idx])
+        print("Nearest row:", nearest_row)
+        i = min(idx + 1, len(data) - 1)
+        x_pointing = SkyCoord(data[:, 2][i] * u.deg, data[:, 1][i] * u.deg, frame="galactic")
+        z_pointing = SkyCoord(data[:, 4][i] * u.deg, data[:, 3][i] * u.deg, frame="galactic")
+        return Attitude.from_axes(x=x_pointing, z=z_pointing, frame="galactic")
+
+    def _counts_in_lut_order(counts: np.ndarray, lut) -> np.ndarray:
+        source_labels = ["BGO_Z0", "BGO_Z1", "BGO_X0", "BGO_X1", "BGO_Y0", "BGO_Y1"]
+        counts_by_label = {
+            label: float(value) for label, value in zip(source_labels, np.asarray(counts, dtype=float))
+        }
+        try:
+            labels = [str(label) for label in lut.labels]
+        except AttributeError:
+            return np.asarray(counts, dtype=float)
+        return np.asarray([counts_by_label[label] for label in labels], dtype=float)
+
+    def _localize_healpix_loctables(loctables, s_counts, b_counts, conf_level=0.9):
+        results = []
+        coordsys = "galactic"
+
+        for label, lut in loctables.items():
+            lut_s_counts = _counts_in_lut_order(s_counts, lut)
+            lut_b_counts = _counts_in_lut_order(b_counts, lut)
+
+            lut.set_background(lut_b_counts)
+            lut.set_data(lut_s_counts)
+
+            ts_map = TSMap(nside=getattr(lut, "nside", nside), coordsys=coordsys)
+            likelihood = NormLocLike(lut)
+            ts_map.compute(likelihood)
+
+            ts_value = float(np.max(ts_map))
+            best = ts_map.best_loc()
+            cont_area = ts_map.error_area(cont=conf_level).to(u.deg**2)
+            eq_radius = np.sqrt(cont_area / np.pi).to(u.deg)
+
+            best_gal = best.galactic
+            results.append({
+                "theta_out": float(90.0 - best_gal.b.deg),
+                "phi_out": float(best_gal.l.deg),
+                "l": float(best_gal.l.deg),
+                "b": float(best_gal.b.deg),
+                "label": label,
+                "ts_map": ts_map,
+                "ts_value": ts_value,
+                "sqrt_ts": float(np.sqrt(ts_value)),
+                "cont_area_deg2": float(cont_area.value),
+                "eq_radius_deg": float(eq_radius.value),
+                "ra_deg": float(best.icrs.ra.deg),
+                "dec_deg": float(best.icrs.dec.deg),
+            })
+
+        return max(results, key=lambda item: item["ts_value"])
 
     for name, path in [
         ("soft_lut", soft_lut_path),
@@ -617,39 +876,31 @@ def localize_bctools(
 
     print("[localize_grb] Initializing BGOLocalizerBCT...")
     nside = 64
+    plots_dir = Path(data_folder) / ".." / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
     # Initialize the localizer with the Look-Up Tables (LUTs) and nside
-    localizer = BGOLocalizerBCT(
+    localizer = ACSLocalizerBCT(
         soft_loctable_path=soft_lut_path,
         medium_loctable_path=medium_lut_path,
         hard_loctable_path=hard_lut_path,
+        output_dir=str(plots_dir),
         nside=nside,
     )
     print("[localize_grb] Localizer ready.")
 
-    # Counts order ['BGO_X0','BGO_X1','BGO_Y0','BGO_Y1','BGO_Z0','BGO_Z1']
-    # load orientation file
-    data = np.loadtxt(orientation_file, usecols=(1, 2, 3, 4, 5, 6, 7, 8), delimiter=' ', skiprows=1, comments=("#", "EN"))
     # get time of the signal from bayes_output
     time_grb = tstart
-    # TODO: OPTIMIZE TIME SELECTION 
-    # time column (first column of orientation file)
-    times_col = data[:, 0]
-    # index of the nearest value
-    idx = np.argmin(np.abs(times_col - time_grb))
-    # corresponding row
-    nearest_row = data[idx]
-    print("Nearest index:", idx)
-    print("Nearest time:", times_col[idx])
-    print("Nearest row:", nearest_row)
-    i = idx+1
-
-    # get x and z pointing as SkyCoord from the nearest row
-    x_pointing = SkyCoord(data[:, 2][i]*u.deg, data[:, 1][i]*u.deg, frame='galactic')
-    z_pointing = SkyCoord(data[:, 4][i]*u.deg, data[:, 3][i]*u.deg, frame='galactic')
-    # build attitude
-    attitude = Attitude.from_axes(x=x_pointing, z=z_pointing, frame='galactic')
+    attitude = _attitude_from_orientation_file(orientation_file, time_grb)
     # Localize GRB
-    result = localizer.localize(s_counts_arr, b_counts_arr, attitude=attitude)
+    if all(hasattr(lut, "to_skyloctable") for lut in localizer.loctables.values()):
+        result = localizer.localize(s_counts_arr, b_counts_arr, attitude=attitude)
+    else:
+        print("[localize_grb] LUTs are already HealpixLocTable objects; using direct TSMap localization.")
+        result = _localize_healpix_loctables(localizer.loctables, s_counts_arr, b_counts_arr)
+    if "ra_deg" not in result or "dec_deg" not in result:
+        best_coord = SkyCoord(l=result["l"] * u.deg, b=result["b"] * u.deg, frame="galactic")
+        result["ra_deg"] = float(best_coord.icrs.ra.deg)
+        result["dec_deg"] = float(best_coord.icrs.dec.deg)
     print(
         result["label"],
         result["sqrt_ts"],
@@ -663,8 +914,6 @@ def localize_bctools(
 
     # Plot localization
     # true_coord = SkyCoord(ra=true_ra * u.deg, dec=true_dec * u.deg, frame="icrs")
-    plots_dir = Path(data_folder) / ".." / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
-    localizer.plot(result, show=True, save_path=f"{plots_dir}/bgo_localization.png")
+    localizer.plot(result, show=False, save_path=f"{plots_dir}/bgo_localization.png")
 
     return str(plots_dir)
