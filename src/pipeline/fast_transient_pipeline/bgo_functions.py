@@ -11,6 +11,8 @@ from typing import Any
 #########################################################
 # TASK 1: Preprocessing
 #########################################################
+# Centralized defaults for every BGO analysis stage. The DAG passes the same
+# structure, and preprocessing deep-merges user YAML overrides into it.
 BGO_ANALYSIS_DEFAULTS: dict[str, Any] = {
     "duration": {
         "lightcurve_key": "light_curve",
@@ -41,6 +43,7 @@ BGO_ANALYSIS_DEFAULTS: dict[str, Any] = {
 def _deep_merge(base: dict[str, Any], override: dict[str, Any] | None) -> dict[str, Any]:
     from copy import deepcopy
 
+    # Keep the default tree immutable across DAG runs.
     merged = deepcopy(base)
     if not override:
         return merged
@@ -53,6 +56,8 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any] | None) -> dict[s
 
 
 def _to_yaml_safe(value: Any) -> Any:
+    # Airflow task outputs and numpy products need to be converted before YAML
+    # persistence; otherwise PyYAML can emit implementation-specific tags.
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, np.generic):
@@ -73,6 +78,8 @@ def _now_iso() -> str:
 
 
 def _ensure_structured_pipeline_config(config: dict[str, Any]) -> dict[str, Any]:
+    # Keep BGO aligned with the GeD YAML schema: one top-level run section
+    # contains resolved inputs and per-task bookkeeping.
     pipeline_name = str(config.get("pipeline_name", "BGO"))
     run_cfg = config.setdefault(pipeline_name, {})
     run_cfg["name"] = config.get("cosidag_id", "cosidag_BGO")
@@ -102,6 +109,8 @@ def _record_pipeline_task(
     start_time: str | None = None,
     end_time: str | None = None,
 ) -> None:
+    # Use one task-record schema for every stage so monitoring and outbox code
+    # can read task status without special cases.
     run_cfg = _ensure_structured_pipeline_config(config)
     existing = run_cfg.get(task_id, {})
     run_cfg[task_id] = {
@@ -116,6 +125,7 @@ def _record_pipeline_task(
 
 def _ensure_pipeline_dirs(data_dir: str) -> tuple[Path, Path]:
     base_dir = Path(data_dir)
+    # Products stay in the COSIDAG products directory; plots are grouped beside it.
     plots_dir = base_dir / ".." / "plots"
     products_dir = base_dir
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -134,6 +144,8 @@ def preprocess_data(lightcurve):
     else:
         raise TypeError("preprocess_data expects a dict or a YAML path string")
 
+    # Promote nested analysis sections to top-level keys for the task wrappers,
+    # while preserving a single canonical `analysis_config` block in YAML.
     analysis_config = _deep_merge(BGO_ANALYSIS_DEFAULTS, config.get("analysis_config", {}))
     config["analysis_config"] = analysis_config
     for section, defaults in analysis_config.items():
@@ -366,14 +378,14 @@ def fit_background_gdt(
     order: int = 2
 ):
     """
-    Fit del background polinomiale su una light curve GDT (TimeBins),
-    escludendo la finestra del segnale.
+    Fit a polynomial background model on a GDT TimeBins light curve,
+    excluding the inferred signal window.
 
     Parameters
     ----------
     lc: TimeBins
-        Light curve del detector.
-        Deve avere almeno: counts, lo_edges, hi_edges, exposure
+        Detector light curve. It must expose counts, lo_edges, hi_edges,
+        and exposure arrays.
     tstart : float
         Start time of the signal interval inferred by Bayesian Blocks (`bb_lc.signal_range.tstart`).
         Units are the same as the input time axis.
@@ -381,9 +393,9 @@ def fit_background_gdt(
         Stop time of the signal interval inferred by Bayesian Blocks (`bb_lc.signal_range.tstop`).
         Units are the same as the input time axis.
     buffer : float, optional
-        Margine extra da escludere attorno al segnale
+        Extra time margin excluded around the signal window.
     order : int, optional
-        Ordine del polinomio
+        Polynomial order.
 
     Returns
     -------
@@ -395,7 +407,7 @@ def fit_background_gdt(
         - "bkg_rate_err"    : errore sul background rate
         - "bkg_counts"      : background stimato in counts/bin
         - "bkg_counts_err"  : errore in counts/bin
-        - "net_counts"      : counts osservati - background counts
+        - "net_counts"      : observed counts - background counts
         - "net_rate"        : rate osservato - background rate
     """
     from gdt.core.background.binned import Polynomial
@@ -403,7 +415,7 @@ def fit_background_gdt(
     excl_start = tstart - buffer
     excl_stop = tstop + buffer
 
-    # bin completamente fuori dalla regione esclusa
+    # Only bins fully outside the excluded signal region are used for the fit.
     mask_bkg = (lc.hi_edges <= excl_start) | (lc.lo_edges >= excl_stop)
 
     n_bkg_bins = np.sum(mask_bkg)
@@ -413,7 +425,7 @@ def fit_background_gdt(
             f"per un polinomio di ordine {order}"
         )
 
-    # costruiamo il modello come in bctools
+    # Match the bctools/GDT polynomial-background API shape: (N, 1) counts.
     bkg_model = Polynomial(
         counts=lc.counts[mask_bkg][:, np.newaxis],
         tstart=lc.lo_edges[mask_bkg],
@@ -423,24 +435,25 @@ def fit_background_gdt(
 
     bkg_model.fit(order=order)
 
-    # ATTENZIONE: interpolate() restituisce RATE, non counts
+    # `interpolate()` returns rates, not counts, so counts/bin are recovered
+    # using the bin exposure below.
     bkg_rate, bkg_rate_err = bkg_model.interpolate(
         tstart=lc.lo_edges,
         tstop=lc.hi_edges
     )
 
-    # da shape (N, 1) a (N,)
+    # Collapse from shape (N, 1) to shape (N,).
     bkg_rate = np.squeeze(bkg_rate)
     bkg_rate_err = np.squeeze(bkg_rate_err)
 
-    # conversione a counts/bin
+    # Convert background rate to expected background counts per bin.
     bkg_counts = bkg_rate * lc.exposure
     bkg_counts_err = bkg_rate_err * lc.exposure
 
-    # osservati
+    # Observed rate for the same bins.
     obs_rate = lc.counts / lc.exposure
 
-    # netti
+    # Net signal after subtracting the fitted background.
     net_counts = lc.counts - bkg_counts
     net_rate = obs_rate - bkg_rate
 
@@ -457,7 +470,8 @@ def fit_background_gdt(
 
 
 def background_extraction_and_data_preparation(
-    # <panel_name>: {"signal": <signal_counts>, "lo_edges": <lo_edges>, "hi_edges": <hi_edges>, "exposure": <exposure>}
+    # Serialized TimeBins per panel:
+    # <panel_name>: {"signal": <counts>, "lo_edges": <lo>, "hi_edges": <hi>, "exposure": <exp>}
     lc_timebins: dict[str, dict[str, list[float]]], 
     tstart: float, 
     tstop: float, 
@@ -478,9 +492,9 @@ def background_extraction_and_data_preparation(
     tstop : `float`
         Stop time of the signal interval inferred by Bayesian Blocks (`bb_lc.signal_range.tstop`).
     buffer : `float`, optional
-        Margine extra da escludere attorno al segnale
+        Extra time margin excluded around the signal window.
     order : `int`, optional
-        Ordine del polinomio
+        Polynomial order.
     panels : `list[str]`, optional
         List of panel names to process.
 
@@ -512,31 +526,26 @@ def background_extraction_and_data_preparation(
         for panel in panels
     }
     
-    # fit background for each panel
+    # Fit the background independently for each BGO shield panel, then reduce
+    # each fitted light curve to the counts inside the signal interval.
     for p in panels:
         print("Panel:", p)
-        # get light curve for the current panel
         lc = lc_panels[p]
-        # fit background
         res = fit_background_gdt(lc, tstart, tstop, buffer=buffer, order=order)
-        # append results
         results.append(res)
 
-        # get the mask for the signal
+        # The signal interval uses bins fully contained in [tstart, tstop].
         mask_sig = (lc.lo_edges >= tstart) & (lc.hi_edges <= tstop)
         
-        # get the signal counts
         signal_counts = np.sum(lc.counts[mask_sig])
-        # get the background counts
         background_counts = np.sum(res["bkg_counts"][mask_sig])
-        # get the net counts
         net_counts = signal_counts - background_counts
 
         signal_counts_arr.append(signal_counts)
         background_counts_arr.append(background_counts)
         net_counts_arr.append(net_counts)
 
-    # final conversion to numpy arrays
+    # Downstream tasks and localization expect compact arrays, not TimeBins.
     signal_counts_arr = np.array(signal_counts_arr)
     background_counts_arr = np.array(background_counts_arr)
     net_counts_arr = np.array(net_counts_arr)
@@ -770,7 +779,10 @@ def localize_bctools(
 ) -> tuple[str, dict]:
     """
     Run BGO localization with BC tools.
-    Counts order: ['BGO_X0','BGO_X1','BGO_Y0','BGO_Y1','BGO_Z0','BGO_Z1'].
+
+    The upstream BGO duration/background tasks produce counts in panel order
+    [z0, z1, x0, x1, y0, y1]. The BC-tools LUTs advertise detector labels such
+    as BGO_X0 and BGO_Z1, so the localization helper reorders counts by label.
     """
     from cosipy.nonimaging.bgo.ACSLocalizerBCT import ACSLocalizerBCT
     import numpy as np
@@ -780,6 +792,8 @@ def localize_bctools(
     from scoords import Attitude
 
     def _attitude_from_orientation_file(path: str, time_grb: float):
+        # Current data challenges provide spacecraft pointing as FITS tables.
+        # Legacy `.ori` text files are still supported for older runs.
         lower_path = str(path).lower()
         if lower_path.endswith((".fits", ".fit", ".fits.gz", ".fit.gz")):
             from astropy.io import fits
@@ -818,6 +832,8 @@ def localize_bctools(
         return Attitude.from_axes(x=x_pointing, z=z_pointing, frame="galactic")
 
     def _counts_in_lut_order(counts: np.ndarray, lut) -> np.ndarray:
+        # BGO light-curve panels are stored in DAG order, while LUT rows are
+        # keyed by detector labels. Reordering by label prevents silent swaps.
         source_labels = ["BGO_Z0", "BGO_Z1", "BGO_X0", "BGO_X1", "BGO_Y0", "BGO_Y1"]
         counts_by_label = {
             label: float(value) for label, value in zip(source_labels, np.asarray(counts, dtype=float))
@@ -829,6 +845,9 @@ def localize_bctools(
         return np.asarray([counts_by_label[label] for label in labels], dtype=float)
 
     def _localize_healpix_loctables(loctables, s_counts, b_counts, conf_level=0.9):
+        # Some current LUT pickles are already sky HEALPix localization tables.
+        # Those do not expose LocalLocTable.to_skyloctable(), so run the BC-tools
+        # likelihood directly instead of going through ACSLocalizerBCT.localize().
         results = []
         coordsys = "galactic"
 
@@ -878,7 +897,8 @@ def localize_bctools(
     nside = 64
     plots_dir = Path(data_folder) / ".." / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
-    # Initialize the localizer with the Look-Up Tables (LUTs) and nside
+    # Initialize the non-imaging localizer so both supported LUT formats are
+    # loaded through the same package entrypoint.
     localizer = ACSLocalizerBCT(
         soft_loctable_path=soft_lut_path,
         medium_loctable_path=medium_lut_path,
@@ -888,10 +908,12 @@ def localize_bctools(
     )
     print("[localize_grb] Localizer ready.")
 
-    # get time of the signal from bayes_output
+    # Use the Bayesian-Blocks signal start as the timestamp for the attitude row.
     time_grb = tstart
     attitude = _attitude_from_orientation_file(orientation_file, time_grb)
-    # Localize GRB
+
+    # LocalLocTable inputs need attitude projection first; HealpixLocTable inputs
+    # are already on a sky grid and can be evaluated directly.
     if all(hasattr(lut, "to_skyloctable") for lut in localizer.loctables.values()):
         result = localizer.localize(s_counts_arr, b_counts_arr, attitude=attitude)
     else:
@@ -908,12 +930,12 @@ def localize_bctools(
         result["dec_deg"],
         result["eq_radius_deg"],
     )
-    # Convert RA and Dec to theta and phi
+    # Keep the historical theta/phi printout for logs while the result payload
+    # stores sky coordinates as RA/Dec and Galactic l/b.
     theta_deg, phi_deg = ra_dec_to_theta_phi(result["ra_deg"],result["dec_deg"])
     print(f"Theta: {theta_deg}, Phi: {phi_deg}")
 
-    # Plot localization
-    # true_coord = SkyCoord(ra=true_ra * u.deg, dec=true_dec * u.deg, frame="icrs")
+    # Save the localization plot without opening an interactive window inside Airflow.
     localizer.plot(result, show=False, save_path=f"{plots_dir}/bgo_localization.png")
 
     return str(plots_dir)

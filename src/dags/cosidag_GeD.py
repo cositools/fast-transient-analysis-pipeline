@@ -18,8 +18,10 @@ from numpy import ndarray
 
 def build_custom(dag):
     # ==============================================
-    # 1. External interpreters + library dirs (same conventions as other DAGs)
+    # 1. External interpreters + library dirs
     # ==============================================
+    # Keep Airflow orchestration separate from the scientific stacks used by
+    # COSIpy and BC-tools. Imports happen inside external callables.
     EXTERNAL_PYTHON_COSIPY = cfg("EXTERNAL_PYTHON_COSIPY", "/home/gamma/envs/cosipy/bin/python")
     EXTERNAL_PYTHON_BCT    = cfg("EXTERNAL_PYTHON_BCT", "/home/gamma/envs/bct/bin/python")
     LIB_DIR_FAST_TRANSIENT_PIPELINE = cfg(
@@ -29,6 +31,8 @@ def build_custom(dag):
     # ==============================================
     # 2. Inputs from COSIDAG sensor/resolve_inputs
     # ==============================================
+    # The sensor resolves files on disk and publishes only paths through XCom.
+    # Preprocessing turns those paths into the shared pipeline_config.yaml.
     SOURCE_FILE = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='grb_file') }}"
     BACKGROUND_FILE = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='background_file') }}"
     SOFT_LUT = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='soft_lut_file') }}"
@@ -155,6 +159,8 @@ def build_custom(dag):
     # ==============================================
     # 3. External callables
     # ==============================================
+    # ExternalPythonOperator callables must import task dependencies inside the
+    # function body because they execute in a different interpreter.
     # ---- 3.1. _run_preprocessing
     def _run_preprocessing(
         lib_dir: str,
@@ -186,6 +192,8 @@ def build_custom(dag):
         sys.path.insert(0, lib_dir)
         from ged_functions import preprocess_data
 
+        # This payload is the root of the shared YAML state used by all later
+        # stages and by the GCN outbox task.
         payload = {
             "source_path": source_file,
             "background_path": background_file,
@@ -236,6 +244,8 @@ def build_custom(dag):
         source_path = str(config.get("source_path", ""))
         background_path = str(config.get("background_path", ""))
         if source_path.endswith(".hdf5") and background_path.endswith(".hdf5"):
+            # Tutorial or replay inputs can already be binned. Still build the
+            # canonical prepared product so downstream tasks use one contract.
             print("[Data_Binning] Input files are already binned (.hdf5). Skipping binning.")
             config["source_binned_file_path"] = source_path
             config["background_binned_file_path"] = background_path
@@ -393,6 +403,8 @@ def build_custom(dag):
     # ======================================================================
     # DAG-GeD (bottom row)
     # ======================================================================
+    # The GeD branch has two analysis tracks: an unbinned fast-localization
+    # branch and a binned COSIpy branch. Both publish final products to GCN_GeD.
     # Node 1. PreProcessing_GeD
     ged_pre_processing = ExternalPythonOperator(
         task_id="PreProcessing_GeD",
@@ -522,15 +534,12 @@ def build_custom(dag):
         dag=dag,
     )
 
-    # Diagram wiring:
-    # Node 1 -> Node 2, Node 1 -> Node 3
+    # Diagram wiring. Large data products stay on disk; XCom carries config
+    # paths and compact result payloads.
     ged_pre_processing >> [ged_unbinned_light_curve_generation, ged_data_binning]
 
-    # Node 2 -> Node 4 -> Node 5
     ged_unbinned_light_curve_generation >> ged_light_curve_analysis >> ged_skymap_unbinned >> ged_duration_and_localization_results
-    # Node 3 -> Node 6 -> Node 7 -> Node 8 -> Node 9 -> Node 10
     ged_data_binning >> ged_tsmap_on_timescales >> ged_light_curve >> ged_duration >> ged_spectral_analysis >> ged_classification
-    # Node 5 -> Node 11, Node 10 -> Node 11
     for node in [ged_classification, ged_duration_and_localization_results]:
         node >> ged_gcn
 
@@ -551,21 +560,10 @@ with COSIDAG(
     date_queries=f"=={datetime.now().strftime('%Y%m%d')}",
     select_policy="latest_mtime",
     file_patterns={
-        # Fast transient inputs
-#        # Support both production-style unbinned FITS and tutorial/classic binned HDF5.
+        # Fast transient inputs.
         "grb_file": "*[Gg][Rr][Bb]*.fits*",
         "background_file": "*[Bb][Gg]*_window.fits*",
-#        "background_window_file": "Total_BG*_unbinned_*_window.fits*",
-#        "orientation_file": "*.fits*",
-#        "response_file": "*.h5",
-#        # BGO localization LUTs
-#        "soft_lut_file": "soft_lut_*.pkl",
-#        "medium_lut_file": "medium_lut_*.pkl",
-#        "hard_lut_file": "hard_lut_*.pkl",
-#        "grb_file": "*grb*binned*.hdf5",
-#        "background_file": "*bkg*binned*.hdf5",
         # Orientation file must end with .fits or .ori and must not contain "GRB" or "BG".
-        #"orientation_file": "!{*[Gg][Rr][Bb]*|*[Bb][Gg]*}*.{fits/ori}",
         "orientation_file": "regex:^(?!.*(?:GRB|BG)).*\\.(?:fits|ori)$",
         # Response file must end with .h5 and must not contain "GRB" or "BG".
         "response_file": "regex:^(?!.*(?:GRB|BG)).*\\.h5$",

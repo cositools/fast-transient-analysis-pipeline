@@ -452,7 +452,6 @@ def _build_prepared_binned_data(
 
 #########################################################
 # TASK 1: Preprocessing
-# WIP: Implement the preprocessing
 #########################################################
 def preprocess_data(
     lightcurve,
@@ -485,7 +484,7 @@ def preprocess_data(
             config[section] = _deep_merge(defaults, config.get(section, {}))
         else:
             config.setdefault(section, defaults)
-    # Required keys for the preprocessing
+    # These inputs define the minimum reproducible GeD run.
     required_keys = [
         "source_path",
         "background_path",
@@ -495,15 +494,16 @@ def preprocess_data(
     missing = [key for key in required_keys if not config.get(key)]
     if missing:
         raise ValueError(f"Missing required preprocessing fields: {missing}")
-    # Data directory
+    # Put products beside the source file unless the YAML overrides data_dir.
     default_data_dir = str(Path(config["source_path"]).parent)
     data_dir = config.get("data_dir", default_data_dir)
     plots_dir, products_dir = _ensure_pipeline_dirs(data_dir)
-    # Define folders
+
     config["data_dir"] = str(Path(data_dir))
     config["plots_dir"] = str(plots_dir)
     config["products_dir"] = str(products_dir)
-    # Emsure folders exist
+    # Be explicit even though _ensure_pipeline_dirs already creates them; this
+    # keeps the behavior obvious to future maintainers.
     plots_dir.mkdir(parents=True, exist_ok=True)
     products_dir.mkdir(parents=True, exist_ok=True)
     nside = int(config["tsmap"].get("nside", 16))
@@ -576,7 +576,6 @@ def preprocess_data(
 
 #########################################################
 # TASK 2: Unbinned_Light_Curve_Generation
-# WIP: Implement the unbinned light curve generation
 #########################################################
 def unbinned_light_curve_generation(config_path: str) -> str:
     """
@@ -790,7 +789,6 @@ def unbinned_light_curve_generation(config_path: str) -> str:
 
 #########################################################
 # TASK 3: Binning
-# WIP: Implement the binning
 #########################################################
 def bin_data(config_path: str) -> tuple[str, str]:
     """
@@ -1955,7 +1953,6 @@ def duration_and_localization_results(config_path: str) -> str:
 
 #########################################################
 # TASK 6: TS_Map_on_different_timescales
-# IMPLEMENTED: Implement the TS map on different timescales
 #########################################################
 def compute_ts_map(
     config_path: str) -> str:
@@ -2150,7 +2147,6 @@ def compute_ts_map(
 
 #########################################################
 # TASK 7: Light_Curve
-# IMPLEMENTED: Implement the light curve
 #########################################################
 def light_curve(
     config_path: str) -> str:
@@ -2357,7 +2353,6 @@ def light_curve(
 
 #########################################################
 # TASK 8: Duration  
-# IMPLEMENTED: Implement the duration
 #########################################################
 def duration(config_path: str) -> str:
     """

@@ -18,8 +18,11 @@ from airflow.operators.python import ExternalPythonOperator, PythonOperator
 
 def build_custom(dag):
     # ==============================================
-    # 1. External interpreters + library dirs (same conventions as other DAGs)
+    # 1. External interpreters + library dirs
     # ==============================================
+    # Keep heavyweight scientific stacks isolated. The Airflow worker only
+    # orchestrates tasks; each stage runs in the environment that owns its
+    # dependencies.
     EXTERNAL_PYTHON_COSIPY = cfg("EXTERNAL_PYTHON_COSIPY", "/home/gamma/envs/cosipy/bin/python")
     EXTERNAL_PYTHON_BGO    = cfg("EXTERNAL_PYTHON_BGO", "/home/gamma/envs/bct/bin/python")
     EXTERNAL_PYTHON_NIMCOSIPY = cfg(
@@ -33,6 +36,8 @@ def build_custom(dag):
     # ==============================================
     # 2. Inputs from COSIDAG sensor/resolve_inputs
     # ==============================================
+    # The COSIDAG sensor resolves concrete file paths and exposes them through
+    # XCom. Preprocessing persists those paths into pipeline_config.yaml.
     LIGHTCURVE_FILE = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='lightcurve_file') }}"
     SOFT_LUT = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='soft_lut_file') }}"
     MEDIUM_LUT = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='medium_lut_file') }}"
@@ -67,6 +72,9 @@ def build_custom(dag):
     # ==============================================
     # 3. External callables
     # ==============================================
+    # ExternalPythonOperator serializes these callables into temporary scripts.
+    # Imports therefore stay inside the callable so they resolve in the selected
+    # virtual environment, not in the scheduler environment.
     # ---- 3.1. _run_preprocessing
     def _run_preprocessing(
         lib_dir: str,
@@ -94,6 +102,8 @@ def build_custom(dag):
         sys.path.insert(0, lib_dir)
         from bgo_functions import preprocess_data
 
+        # Preprocessing is the only task that builds the canonical YAML state
+        # from COSIDAG inputs. Later tasks receive this path and update it.
         payload = {
             "lightcurve_path": lightcurve_file,
             "soft_lut_path": soft_lut_path,
@@ -134,6 +144,8 @@ def build_custom(dag):
         lightcurve_file = config.get("lightcurve_path") or config.get("lightcurve_file")
         duration_config = config.get("duration", {})
         lightcurve_key = duration_config.get("lightcurve_key", "light_curve")
+        # The BGO light-curve NPZ stores the multi-panel array under a
+        # configurable key so future challenge products can keep the same DAG.
         lightcurve = np.load(lightcurve_file)[lightcurve_key]
         lc_timebins, bb_lc_timebins, tstart, tstop, t90, t90_err_low, t90_err_high = get_duration(
             lightcurve,
@@ -188,6 +200,8 @@ def build_custom(dag):
             config = yaml.load(f, Loader=yaml.FullLoader) or {}
         duration_result = config.get("duration_result", {})
         background_config = config.get("background", {})
+        # Background fitting consumes the serialized TimeBins produced by the
+        # duration task and returns compact per-panel count arrays.
         signal_counts, background_counts, net_counts = background_extraction_and_data_preparation(
             duration_result["lc_timebins"],
             float(duration_result["tstart"]),
@@ -307,6 +321,8 @@ def build_custom(dag):
         from bgo_functions import _record_pipeline_task
 
         def _as_mapping(value):
+            # Airflow native rendering usually preserves dicts, but templated
+            # XComs can still arrive as strings depending on operator context.
             if isinstance(value, dict):
                 return value
             if isinstance(value, str) and value:
@@ -341,6 +357,8 @@ def build_custom(dag):
         if "tstart" not in duration_result:
             raise KeyError("Missing key from Duration_on_different_binning result: tstart")
         data_folder = os.path.dirname(os.path.abspath(lightcurve_file))
+        # Pass upstream XCom payloads directly to avoid depending on the latest
+        # writer of pipeline_config.yaml when parallel branches finish close together.
         output_dir = localize_bctools(
             data_folder=data_folder,
             soft_lut_path=soft_lut_path,
@@ -401,6 +419,8 @@ def build_custom(dag):
         from bgo_functions import _record_pipeline_task
 
         def _as_mapping(value):
+            # See localization wrapper: tolerate both native dicts and templated
+            # string representations from XCom.
             if isinstance(value, dict):
                 return value
             if isinstance(value, str) and value:
@@ -491,6 +511,8 @@ def build_custom(dag):
     # ======================================================================
     # DAG-BGO (top row)
     # ======================================================================
+    # The BGO graph mirrors the Phase-1 diagram: duration fans out to plotting
+    # and background work; background feeds significance and localization.
     # Node 1. PreProcessing_BGO
     # bgo_pre_processing = EmptyOperator(task_id="PreProcessing_BGO", dag=dag)
     bgo_pre_processing = ExternalPythonOperator(
@@ -555,7 +577,8 @@ def build_custom(dag):
         },
         dag=dag,
     )
-    # Localization block (3 internal branches)
+    # Localization block. Chi2 and DL are placeholders; bc_tools is the active
+    # branch and runs in nimcosipy because it needs cosipy.nonimaging.
     # Node 6. Localization_Chi2
     bgo_localization_chi2 = EmptyOperator(task_id="Localization_Chi2", dag=dag)
     # Node 7. Localization_bc_tools
@@ -598,15 +621,13 @@ def build_custom(dag):
         dag=dag,
     )
 
-    # Diagram wiring:
-    # Node 1 -> Node 2
+    # Diagram wiring. XCom carries small result dictionaries; large products and
+    # shared metadata stay on disk in pipeline_config.yaml.
     bgo_pre_processing >> bgo_duration_on_bins
-    # Node 2 -> Node 3, Node 2 -> Node 4, Node 2 -> Node 5
     bgo_duration_on_bins >> [
         bgo_background_extraction_and_prep,
         bgo_light_curve_generation,
     ]
-    # Node 3 -> Node 6, Node 3 -> Node 7, Node 3 -> Node 8
     bgo_background_extraction_and_prep >> [
         bgo_localization_chi2,
         bgo_localization_bc_tools,
@@ -615,9 +636,7 @@ def build_custom(dag):
     ]
     for node in [bgo_localization_chi2, bgo_localization_bc_tools, bgo_localization_dl, bgo_significance_analysis]: 
         node >> bgo_localization_results
-    # Node 9 -> Node 10, Node 11
     bgo_localization_results >> [bgo_classification, bgo_gcn]
-    # Node 10 -> Node 11
     bgo_classification >> bgo_gcn
 
     
@@ -639,7 +658,8 @@ with COSIDAG(
     date_queries=f"<={datetime.now().strftime('%Y%m%d')}",
     select_policy="latest_mtime",
     file_patterns={
-        # Fast transient inputs
+        # Fast transient inputs. The orientation pattern excludes science files
+        # containing GRB/BG and accepts both current FITS and legacy ORI files.
         "lightcurve_file": "*.npz",
         "soft_lut_file": "soft_lut_*.pkl",
         "medium_lut_file": "medium_lut_*.pkl",
