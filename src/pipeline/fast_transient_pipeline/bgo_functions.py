@@ -1,11 +1,10 @@
+from __future__ import annotations
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from gdt.core.data_primitives import TimeBins
-from bctools.analysis import BayesianBlocksLightcurve
 import os
-from gdt.core.background.binned import Polynomial
 import math
 
 #########################################################
@@ -70,6 +69,8 @@ def get_duration(
         - signal_range : `TimeRange`
             TimeRange containing the start and stop times of the signal interval inferred by Bayesian Blocks.
     """
+    from gdt.core.data_primitives import TimeBins
+    from bctools.analysis import BayesianBlocksLightcurve
 
     data = lightcurve
 
@@ -226,6 +227,7 @@ def fit_background_gdt(
         - "net_counts"      : counts osservati - background counts
         - "net_rate"        : rate osservato - background rate
     """
+    from gdt.core.background.binned import Polynomial
     
     excl_start = tstart - buffer
     excl_stop = tstop + buffer
@@ -320,6 +322,8 @@ def background_extraction_and_data_preparation(
     net_counts_arr : `np.ndarray`
         Array of net counts for each panel.
     """
+    from gdt.core.data_primitives import TimeBins
+
     results = []
     signal_counts_arr = []
     background_counts_arr = []
@@ -403,6 +407,8 @@ def light_curve_generation(
     tuple[str, str]
         Paths of the saved plots: (light_curve_path, background_fit_path)
     """
+    from gdt.core.data_primitives import TimeBins
+
     lc_timebins, bb_lc_timebins, tstart, tstop, t90, t90_err_low, t90_err_high = bayes_output
 
     if not isinstance(lc_timebins, dict) or len(lc_timebins) == 0:

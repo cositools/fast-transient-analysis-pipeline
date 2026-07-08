@@ -12,7 +12,7 @@ sys.path.append("/home/gamma/airflow/modules")
 from cosidag import COSIDAG
 from cosidag import cfg
 from airflow.operators.empty import EmptyOperator
-from airflow.operators.python import ExternalPythonOperator
+from airflow.operators.python import ExternalPythonOperator, PythonOperator
 from numpy import ndarray
 
 
@@ -320,6 +320,40 @@ def build_custom(dag):
 
         return duration(config_path)
 
+    # ---- 3.10. _queue_gcn_outbox_notice
+    def _queue_gcn_outbox_notice(
+        lib_dir: str,
+        dag_id: str,
+        dag_run_id: str,
+        task_id: str,
+        trigger_time: str,
+        config_path=None,
+        duration_result=None,
+        localization_result=None,
+        topic=None,
+    ):
+        import os
+        import sys
+
+        sys.path.insert(0, lib_dir)
+        from gcn.outbox import queue_cosi_alert
+
+        return queue_cosi_alert(
+            pipeline="GeD",
+            instrument="Germanium Detectors",
+            dag_id=dag_id,
+            dag_run_id=dag_run_id,
+            task_id=task_id,
+            trigger_time=trigger_time,
+            topic=topic,
+            source_product_dir=os.path.dirname(config_path) if config_path else None,
+            source_config_path=config_path,
+            products={
+                "duration_result": duration_result,
+                "localization_result": localization_result,
+            },
+        )
+
     def _run_light_curve_analysis(lib_dir: str, config_path: str):
         import os
         import sys
@@ -471,7 +505,22 @@ def build_custom(dag):
     # Node 10. Classification_GeD
     ged_classification = EmptyOperator(task_id="Classification_GeD", dag=dag)
     # Node 11. GCN_GeD
-    ged_gcn = EmptyOperator(task_id="GCN_GeD", dag=dag)
+    ged_gcn = PythonOperator(
+        task_id="GCN_GeD",
+        python_callable=_queue_gcn_outbox_notice,
+        op_kwargs={
+            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
+            "dag_id": "{{ dag.dag_id }}",
+            "dag_run_id": "{{ run_id }}",
+            "task_id": "GCN_GeD",
+            "trigger_time": "{{ ts }}",
+            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
+            "duration_result": "{{ ti.xcom_pull(task_ids='Duration', key='return_value') }}",
+            "localization_result": "{{ ti.xcom_pull(task_ids='Duration_and_Localization_Results', key='return_value') }}",
+            "topic": cfg("GCN_GED_OUTBOUND_TOPIC", cfg("GCN_OUTBOUND_TOPIC_DEFAULT", "gcn.notices.cosi.ged.test.alert")),
+        },
+        dag=dag,
+    )
 
     # Diagram wiring:
     # Node 1 -> Node 2, Node 1 -> Node 3
