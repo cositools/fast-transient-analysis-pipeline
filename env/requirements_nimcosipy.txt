@@ -1,0 +1,31 @@
+# requirements_nimcosipy.txt
+# Runtime: Python 3.12
+#
+# Environment for BGO non-imaging localization tasks. It combines the COSIpy
+# runtime, bc-tools localization dependencies, and the local cosipy.nonimaging
+# checkout mounted inside the Airflow container.
+
+# Packaging compatibility: legacy dependencies still import pkg_resources.
+setuptools==80.9.0
+
+# Conservative scientific stack shared with the COSIpy/BCT environments.
+numpy>=1.24,<2
+scipy>=1.10,<=1.15.3
+matplotlib>=3.7.1,<3.9
+pandas>=2.0,<2.2
+h5py>=3
+pyyaml
+
+# Runtime utilities used by COSIpy.
+psutil
+py7zr
+
+# Core runtime packages.
+-e git+https://github.com/cositools/cosipy.git@develop#egg=cosipy
+git+https://gitlab.com/burstcube/bc-tools.git@develop
+
+# Local cosipy.nonimaging checkout. In docker-compose, the host workspace
+# /Users/riccardofalco/cosi is mounted as /home/gamma/airflow/modules_pool.
+# Commit 3f62bcb03d60dbecfa01b05040bdbf413840ffe6 is
+# origin/bgo-localization, which contains the non-imaging BGO localizer modules.
+-e git+file:///home/gamma/airflow/modules_pool/cosipy.nonimaging@3f62bcb03d60dbecfa01b05040bdbf413840ffe6#egg=cosipy.nonimaging

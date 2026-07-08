@@ -52,6 +52,14 @@ environments:
     enabled: true
     description: "BCT/GDT environment for duration and BGO localization"
     python_version: "3.11"
+
+  # Environment 3: COSIpy non-imaging environment for BGO localization
+  nimcosipy:
+    requirements: env/requirements_nimcosipy.txt
+    venv_path: /home/gamma/envs/nimcosipy
+    enabled: true
+    description: "COSIpy non-imaging environment for BGO localization"
+    python_version: "3.12"
   
 # Default environment to use if none specified
 default_environment: cosipy
