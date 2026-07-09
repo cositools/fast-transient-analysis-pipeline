@@ -18,6 +18,12 @@ cosipy  -> preprocessing, unbinned localization, binning, TS maps, light curves
 bct     -> Bayesian-Blocks duration task
 ```
 
+`Skymap_unbinned` and `Duration_and_Localization_Results` query the local GCN MySQL inbox
+(`gcn_inbound_notices`) through `gcn.query.query_relevant_grb_notices`. Database access is
+configured with the `GCN_DB_*` environment variables passed by COSIflow. The current behavior is
+observational only: matching long/short GRB notices are printed and stored in YAML; when there are
+no relevant rows, the task logs an informational message.
+
 The shared YAML state is structured under a top-level `GeD` run section:
 
 ```yaml
@@ -368,6 +374,10 @@ S_li_ma(pixel) = f(Non, Noff, alpha)
 
 The computation is chunked by pixels and events to limit memory use.
 
+After the skymap metadata is assembled, the task queries the GCN inbound database for long/short GRB
+notices in the current science time window. Any matching notices are printed in the task log and
+stored in the skymap payload.
+
 ### Output
 
 For each `nside`:
@@ -400,6 +410,14 @@ The config is updated with:
 - best `(l, b)` per `nside`;
 - maximum significance;
 - map runtime.
+- `gcn_notice_query`, containing the query status, time window, count, and notice summaries.
+
+The shared config also records the same payload under:
+
+```yaml
+gcn_notice_queries:
+  Skymap_unbinned: ...
+```
 
 ## Task 5: Duration_and_Localization_Results
 
@@ -437,6 +455,8 @@ best_b_deg
 - renders a Mollweide significance map;
 - writes a timing table;
 - optionally writes an NSIDE summary if multiple NSIDEs were run.
+- queries the GCN inbound database for long/short GRB notices overlapping the ON window and logs
+  any notice metadata that was received.
 
 It also copies the reconstructed localization back into the config:
 
@@ -458,6 +478,14 @@ grb_localization_top50.csv
 grb_significance_map.png
 grb_timing.csv
 grb_fast_localize_results.yaml
+```
+
+`grb_fast_localize_results.yaml` includes `gcn_notice_query`; the shared config also records the
+same payload under:
+
+```yaml
+gcn_notice_queries:
+  Duration_and_Localization_Results: ...
 ```
 
 Optional outputs when multiple NSIDEs are run:

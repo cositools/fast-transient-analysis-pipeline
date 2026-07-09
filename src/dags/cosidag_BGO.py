@@ -138,6 +138,7 @@ def build_custom(dag):
         import fast_helper_functions as fhf
         from bgo_functions import get_duration
         from bgo_functions import _record_pipeline_task
+        from gcn.query import query_relevant_grb_notices
 
         with open(config_path, "r") as f:
             config = yaml.load(f, Loader=yaml.FullLoader) or {}
@@ -163,7 +164,15 @@ def build_custom(dag):
             "t90_err_high": float(t90_err_high),
             "lightcurve_file": lightcurve_file,
         }
+        gcn_query_result = query_relevant_grb_notices(
+            config=config,
+            task_id="Duration_on_different_binning",
+            tstart=tstart,
+            tstop=tstop,
+        )
+        result["gcn_notice_query"] = gcn_query_result
         config["duration_result"] = result
+        config.setdefault("gcn_notice_queries", {})["Duration_on_different_binning"] = gcn_query_result
         _record_pipeline_task(
             config,
             task_id="Duration_on_different_binning",

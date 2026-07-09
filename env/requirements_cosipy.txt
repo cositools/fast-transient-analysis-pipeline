@@ -15,6 +15,7 @@ h5py>=3
 # Runtime utilities.
 psutil
 py7zr
+PyMySQL>=1.1.1
 
 # Interactive tools. Move these to a separate dev file if the Airflow runtime
 # does not need notebooks.

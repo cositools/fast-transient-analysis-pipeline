@@ -13,6 +13,9 @@ pandas>=2.0,<2.2
 # Usato direttamente dalla pipeline per i file di configurazione.
 pyyaml
 
+# Usato dai task che interrogano il database GCN inbound.
+PyMySQL>=1.1.1
+
 # BCTools installa automaticamente:
 # - scoords
 # - histpy

@@ -1561,6 +1561,7 @@ def skymap_unbinned(config_path: str) -> str:
         from . import fast_helper_functions as fhf
     except ImportError:
         import fast_helper_functions as fhf
+    from gcn.query import query_relevant_grb_notices
 
     task_start = _now_iso()
     config = fhf._load_yaml(config_path)
@@ -1574,8 +1575,19 @@ def skymap_unbinned(config_path: str) -> str:
 
     if fl.get("status") == "skipped":
         out = products_dir / f"{fl.get('out_prefix', 'grb')}_fast_localize_skymap.yaml"
-        p = {"status": "skipped", "reason": "fast_localize prep was skipped"}
+        gcn_query_result = query_relevant_grb_notices(
+            config=config,
+            task_id="Skymap_unbinned",
+            tstart=config.get("tstart"),
+            tstop=config.get("tstop"),
+        )
+        p = {
+            "status": "skipped",
+            "reason": "fast_localize prep was skipped",
+            "gcn_notice_query": gcn_query_result,
+        }
         config["fast_localize_skymap_yaml"] = str(out)
+        config.setdefault("gcn_notice_queries", {})["Skymap_unbinned"] = gcn_query_result
         _record_pipeline_task(
             config,
             task_id="Skymap_unbinned",
@@ -1712,8 +1724,16 @@ def skymap_unbinned(config_path: str) -> str:
         "summary_rows": summary_rows,
         "t_map_main_s": float(t_map_main),
     }
+    gcn_query_result = query_relevant_grb_notices(
+        config=config,
+        task_id="Skymap_unbinned",
+        tstart=config.get("tstart"),
+        tstop=config.get("tstop"),
+    )
+    payload["gcn_notice_query"] = gcn_query_result
     config["fast_localize"] = {**fl, **payload}
     config["fast_localize_skymap_yaml"] = str(skymap_yaml)
+    config.setdefault("gcn_notice_queries", {})["Skymap_unbinned"] = gcn_query_result
     _record_pipeline_task(
         config,
         task_id="Skymap_unbinned",
@@ -1749,6 +1769,7 @@ def duration_and_localization_results(config_path: str) -> str:
         from . import fast_helper_functions as fhf
     except ImportError:
         import fast_helper_functions as fhf
+    from gcn.query import query_relevant_grb_notices
 
     task_start = _now_iso()
     config = fhf._load_yaml(config_path)
@@ -1764,8 +1785,20 @@ def duration_and_localization_results(config_path: str) -> str:
     results_yaml = products_dir / f"{out_prefix}_fast_localize_results.yaml"
 
     if fl.get("status") == "skipped":
-        p = {"status": "skipped"}
+        gcn_query_result = query_relevant_grb_notices(
+            config=config,
+            task_id="Duration_and_Localization_Results",
+            tstart=config.get("tstart"),
+            tstop=config.get("tstop"),
+        )
+        p = {
+            "status": "skipped",
+            "gcn_notice_query": gcn_query_result,
+        }
         config["fast_localize_results_yaml"] = str(results_yaml)
+        config.setdefault("gcn_notice_queries", {})[
+            "Duration_and_Localization_Results"
+        ] = gcn_query_result
         _record_pipeline_task(
             config,
             task_id="Duration_and_Localization_Results",
@@ -1937,8 +1970,18 @@ def duration_and_localization_results(config_path: str) -> str:
         "nside_summary_png": out_tbl,
         "timings_s": {"t_io": t_io, "t_prep": t_prep, "t_map": t_map_main, "t_total": t_total},
     }
+    gcn_query_result = query_relevant_grb_notices(
+        config=config,
+        task_id="Duration_and_Localization_Results",
+        tstart=on_start,
+        tstop=on_stop,
+    )
+    results_payload["gcn_notice_query"] = gcn_query_result
     config["fast_localize"] = {**fl, **results_payload}
     config["fast_localize_results_yaml"] = str(results_yaml)
+    config.setdefault("gcn_notice_queries", {})[
+        "Duration_and_Localization_Results"
+    ] = gcn_query_result
     _record_pipeline_task(
         config,
         task_id="Duration_and_Localization_Results",

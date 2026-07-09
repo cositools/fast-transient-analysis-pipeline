@@ -19,6 +19,12 @@ bct         -> duration, background, and light-curve tasks
 nimcosipy   -> BGO localization with cosipy.nonimaging and bc-tools
 ```
 
+The duration task also queries the local GCN MySQL inbox (`gcn_inbound_notices`) through
+`gcn.query.query_relevant_grb_notices`. Database access is configured with the `GCN_DB_*`
+environment variables passed by COSIflow. If no matching long/short GRB notice is found, the task
+logs an informational message; if the database is unavailable, the query is recorded as unavailable
+without failing the pipeline.
+
 The shared YAML state follows the same structure used by GeD:
 
 ```yaml
@@ -120,6 +126,8 @@ The task:
 - selects the panel with the highest peak counts;
 - runs Bayesian Blocks on that selected panel;
 - extracts signal start/stop, `T90`, and `T90` uncertainty.
+- queries the GCN inbound database for existing long/short GRB notices in the inferred time window
+  and prints the received notice metadata when matches exist.
 
 If Bayesian Blocks fails, the task returns sentinel values while preserving the expected tuple
 shape for downstream tasks.
@@ -137,6 +145,13 @@ duration_result:
   t90: ...
   t90_err_low: ...
   t90_err_high: ...
+  gcn_notice_query:
+    status: ok
+    count: ...
+    notices: [...]
+
+gcn_notice_queries:
+  Duration_on_different_binning: ...
 ```
 
 ## Task 3: Background_extraction_and_data_preparation
