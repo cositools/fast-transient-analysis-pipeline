@@ -106,7 +106,7 @@ if [ -z "$COSI_PATH" ]; then
 fi
 
 # default branch for the cosiflow repository
-BRANCH_COSIFLOW="v0.1.0"
+BRANCH_COSIFLOW="v0.2.0"
 
 # ==============================================
 # 1. Download the cosiflow repository
