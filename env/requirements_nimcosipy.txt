@@ -28,4 +28,4 @@ git+https://gitlab.com/burstcube/bc-tools.git@develop
 # /Users/riccardofalco/cosi is mounted as /home/gamma/airflow/modules_pool.
 # Commit 3f62bcb03d60dbecfa01b05040bdbf413840ffe6 is
 # origin/bgo-localization, which contains the non-imaging BGO localizer modules.
--e git+file:///home/gamma/airflow/modules_pool/cosipy.nonimaging@3f62bcb03d60dbecfa01b05040bdbf413840ffe6#egg=cosipy.nonimaging
+-e git+https://github.com/NicoloParmiggiani/cosipy.nonimaging.git@bgo-localization#egg=cosipy.nonimaging
