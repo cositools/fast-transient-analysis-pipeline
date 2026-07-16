@@ -24,8 +24,8 @@ py7zr
 -e git+https://github.com/cositools/cosipy.git@develop#egg=cosipy
 git+https://gitlab.com/burstcube/bc-tools.git@develop
 
-# Local cosipy.nonimaging checkout. In docker-compose, the host workspace
-# /Users/riccardofalco/cosi is mounted as /home/gamma/airflow/modules_pool.
-# Commit 3f62bcb03d60dbecfa01b05040bdbf413840ffe6 is
-# origin/bgo-localization, which contains the non-imaging BGO localizer modules.
--e git+https://github.com/NicoloParmiggiani/cosipy.nonimaging.git@bgo-localization#egg=cosipy.nonimaging
+# Official cositools repository. The BGO localizer is currently provided by
+# pull request #2; pin its current commit to keep installs reproducible. This
+# is intentionally non-editable: pip builds it without retaining a VCS checkout
+# under the managed virtual environment.
+cosipy.nonimaging @ git+https://github.com/cositools/cosipy.nonimaging.git@7d55da4ff2fb89da0d97ae6aea2da8563277ab5d

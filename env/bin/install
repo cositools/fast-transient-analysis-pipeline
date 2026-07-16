@@ -26,12 +26,12 @@
 
 # define a macro `log` for printing messages with color green
 log() {
-    echo -e "\033[32m$1\033[0m"
+    printf '\033[32m%s\033[0m\n' "$1"
 }
 
 # define a macro `error` for printing messages with color red
 error() {
-    echo -e "\033[31m$1\033[0m"
+    printf '\033[31m%s\033[0m\n' "$1" >&2
     exit 1
 }
 
@@ -39,7 +39,7 @@ error() {
 # to run the function call
 # run_sed "s#${pattern}#${replacement}#" file
 run_sed() {
-    if [[ "$OSTYPE" == "darwin"* ]]; then
+    if [ "$(uname -s)" = "Darwin" ]; then
         # Sintax macOS (BSD)
         sed -i '' "$@"
     else
@@ -49,18 +49,26 @@ run_sed() {
 }
 
 # Step 3: one line per variable:
-# NAME|default_value|Prompt text|sed_pattern|replacement_template
+# NAME|default_value|Prompt text|sed_pattern|replacement_template|input_mode
+# input_mode can be "text" or "secret".
 map_compose_variables() {
     cat <<'EOF'
-AIRFLOW_ADMIN_PASSWORD|cosipass|Enter the password for the Airflow Web UI|^  AIRFLOW_ADMIN_PASSWORD: \${AIRFLOW_ADMIN_PASSWORD:-[^}]*}|  AIRFLOW_ADMIN_PASSWORD: \${AIRFLOW_ADMIN_PASSWORD:-__VALUE__}
-HOST_IP|localhost|Enter the HOST_IP|^  HOST_IP: \${HOST_IP:-[^}]*}|  HOST_IP: \${HOST_IP:-__VALUE__}
-AIRFLOW_ADMIN_USERNAME|admin|Enter the Airflow admin username|^  AIRFLOW_ADMIN_USERNAME: \${AIRFLOW_ADMIN_USERNAME:-[^}]*}|  AIRFLOW_ADMIN_USERNAME: \${AIRFLOW_ADMIN_USERNAME:-__VALUE__}
-AIRFLOW_ADMIN_EMAIL|admin@localhost|Enter the Airflow admin email|^  AIRFLOW_ADMIN_EMAIL: \${AIRFLOW_ADMIN_EMAIL:-[^}]*}|  AIRFLOW_ADMIN_EMAIL: \${AIRFLOW_ADMIN_EMAIL:-__VALUE__}
-MAILHOG_WEBUI_PORT|8025|Enter the MailHog Web UI port|^  MAILHOG_WEBUI_PORT: \${MAILHOG_WEBUI_PORT:-[^}]*}|  MAILHOG_WEBUI_PORT: \${MAILHOG_WEBUI_PORT:-__VALUE__}
-AIRFLOW_WEBUI_PORT|8080|Enter the Airflow Web UI port|^  AIRFLOW_WEBUI_PORT: \${AIRFLOW_WEBUI_PORT:-[^}]*}|  AIRFLOW_WEBUI_PORT: \${AIRFLOW_WEBUI_PORT:-__VALUE__}
-POSTGRES_USER|airflow_user|Enter the Postgres username|^  POSTGRES_USER: \${POSTGRES_USER:-[^}]*}|  POSTGRES_USER: \${POSTGRES_USER:-__VALUE__}
-POSTGRES_DB|airflow_db|Enter the Postgres database name|^  POSTGRES_DB: \${POSTGRES_DB:-[^}]*}|  POSTGRES_DB: \${POSTGRES_DB:-__VALUE__}
-POSTGRES_PASSWORD|secure_password|Enter the Postgres password|^  POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-[^}]*}|  POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-__VALUE__}
+AIRFLOW_ADMIN_PASSWORD|cosipass|Enter the password for the Airflow Web UI|^  AIRFLOW_ADMIN_PASSWORD: \${AIRFLOW_ADMIN_PASSWORD:-[^}]*}|  AIRFLOW_ADMIN_PASSWORD: \${AIRFLOW_ADMIN_PASSWORD:-__VALUE__}|secret
+HOST_IP|127.0.0.1|Enter the host IP used for published services|^x-host-ip: &host-ip "[^"]*"|x-host-ip: &host-ip "__VALUE__"|text
+AIRFLOW_ADMIN_USERNAME|admin|Enter the Airflow admin username|^  AIRFLOW_ADMIN_USERNAME: \${AIRFLOW_ADMIN_USERNAME:-[^}]*}|  AIRFLOW_ADMIN_USERNAME: \${AIRFLOW_ADMIN_USERNAME:-__VALUE__}|text
+AIRFLOW_ADMIN_EMAIL|admin@localhost|Enter the Airflow admin email|^  AIRFLOW_ADMIN_EMAIL: \${AIRFLOW_ADMIN_EMAIL:-[^}]*}|  AIRFLOW_ADMIN_EMAIL: \${AIRFLOW_ADMIN_EMAIL:-__VALUE__}|text
+MAILHOG_WEBUI_PORT|8025|Enter the MailHog Web UI port|^  MAILHOG_WEBUI_PORT: \${MAILHOG_WEBUI_PORT:-[^}]*}|  MAILHOG_WEBUI_PORT: \${MAILHOG_WEBUI_PORT:-__VALUE__}|text
+AIRFLOW_WEBUI_PORT|8080|Enter the Airflow Web UI port|^  AIRFLOW_WEBUI_PORT: \${AIRFLOW_WEBUI_PORT:-[^}]*}|  AIRFLOW_WEBUI_PORT: \${AIRFLOW_WEBUI_PORT:-__VALUE__}|text
+POSTGRES_USER|airflow_user|Enter the Postgres username|^  POSTGRES_USER: \${POSTGRES_USER:-[^}]*}|  POSTGRES_USER: \${POSTGRES_USER:-__VALUE__}|text
+POSTGRES_DB|airflow_db|Enter the Postgres database name|^  POSTGRES_DB: \${POSTGRES_DB:-[^}]*}|  POSTGRES_DB: \${POSTGRES_DB:-__VALUE__}|text
+POSTGRES_PASSWORD|secure_password|Enter the Postgres password|^  POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-[^}]*}|  POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-__VALUE__}|secret
+GCN_MYSQL_HOST_PORT|3307|Enter the host port for the GCN MySQL service|^x-gcn-mysql-host-port: &gcn-mysql-host-port [0-9][0-9]*|x-gcn-mysql-host-port: &gcn-mysql-host-port __VALUE__|text
+GCN_DB_NAME|gcn|Enter the GCN MySQL database name|^  GCN_DB_NAME: \${GCN_DB_NAME:-[^}]*}|  GCN_DB_NAME: \${GCN_DB_NAME:-__VALUE__}|text
+GCN_DB_USER|gcn_user|Enter the GCN MySQL username|^  GCN_DB_USER: \${GCN_DB_USER:-[^}]*}|  GCN_DB_USER: \${GCN_DB_USER:-__VALUE__}|text
+GCN_DB_PASSWORD|gcn_password|Enter the GCN MySQL password|^  GCN_DB_PASSWORD: \${GCN_DB_PASSWORD:-[^}]*}|  GCN_DB_PASSWORD: \${GCN_DB_PASSWORD:-__VALUE__}|secret
+GCN_MYSQL_ROOT_PASSWORD|gcn_root_password|Enter the GCN MySQL root password|^      MYSQL_ROOT_PASSWORD: \${GCN_MYSQL_ROOT_PASSWORD:-[^}]*}|      MYSQL_ROOT_PASSWORD: \${GCN_MYSQL_ROOT_PASSWORD:-__VALUE__}|secret
+GCN_CLIENT_ID||Enter the GCN Kafka client ID (leave empty to disable authenticated access)|^  GCN_CLIENT_ID: \${GCN_CLIENT_ID:-[^}]*}|  GCN_CLIENT_ID: \${GCN_CLIENT_ID:-__VALUE__}|text
+GCN_CLIENT_SECRET||Enter the GCN Kafka client secret (leave empty if not configured)|^  GCN_CLIENT_SECRET: \${GCN_CLIENT_SECRET:-[^}]*}|  GCN_CLIENT_SECRET: \${GCN_CLIENT_SECRET:-__VALUE__}|secret
 EOF
 }
 
@@ -70,9 +78,17 @@ prompt_and_update_compose_var() {
     local prompt="$3"
     local pattern="$4"
     local replacement_template="$5"
-    local value value_escaped replacement
+    local input_mode="${6:-text}"
+    local value value_escaped replacement_template_escaped replacement
 
-    read -r -p "$prompt (default is $default): " value </dev/tty
+    if [ "$input_mode" = "secret" ]; then
+        printf '%s (press Enter to use the default): ' "$prompt" >/dev/tty
+        IFS= read -r -s value </dev/tty
+        printf '\n' >/dev/tty
+    else
+        printf '%s (default is %s): ' "$prompt" "$default" >/dev/tty
+        IFS= read -r value </dev/tty
+    fi
     value="${value:-$default}"
 
     # Escape for sed replacement
@@ -80,43 +96,65 @@ prompt_and_update_compose_var() {
     value_escaped="${value_escaped//#/\\#}"
     value_escaped="${value_escaped//&/\\&}"
 
-    replacement="${replacement_template//__VALUE__/$value_escaped}"
+    # In a sed replacement, an unescaped '&' expands to the entire matched
+    # string. Escape literal YAML anchors such as &host-ip before replacing
+    # the value placeholder.
+    replacement_template_escaped="${replacement_template//&/\\&}"
+    replacement="${replacement_template_escaped//__VALUE__/$value_escaped}"
 
+    grep -q "$pattern" docker-compose.yaml || error "Cannot find the configuration entry for $name in docker-compose.yaml"
     run_sed "s#${pattern}#${replacement}#" docker-compose.yaml || error "Failed to update $name in docker-compose.yaml"
 
-    log "Compose file modified with $name: $value"
+    if [ "$input_mode" = "secret" ]; then
+        log "Compose file modified with $name: [hidden]"
+    else
+        log "Compose file modified with $name: $value"
+    fi
 }
 
 # ==============================================
 # 0. Parse the arguments
 # ==============================================
+COSIFLOW_REF="${COSIFLOW_REF:-v0.2.0}"
+
 # parse the arguments, long argument --cosi-path is provided, or short argument -c is provided:
 # if no argument is provided, use the default path
-while getopts "c:" opt; do
-    case $opt in
-        c) COSI_PATH=$OPTARG ;;
-        :) echo "Option -$OPTARG requires an argument." >&2; exit 1 ;;
-        *) echo "Usage: $0 [-c <cosi_path>]" >&2; exit 1 ;;
-        esac
-    done
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -c|--cosi-path)
+            [ "$#" -ge 2 ] || error "Option $1 requires an argument"
+            COSI_PATH="$2"
+            shift 2
+            ;;
+        -r|--cosiflow-ref)
+            [ "$#" -ge 2 ] || error "Option $1 requires an argument"
+            COSIFLOW_REF="$2"
+            shift 2
+            ;;
+        -h|--help)
+            printf 'Usage: %s [-c|--cosi-path <cosi_path>] [-r|--cosiflow-ref <branch_or_tag>]\n' "$0"
+            exit 0
+            ;;
+        *)
+            error "Unknown option: $1"
+            ;;
+    esac
+done
 
 # if no argument is provided, use the default path
 if [ -z "$COSI_PATH" ]; then
     COSI_PATH=$HOME/cosi
 fi
 
-# default branch for the cosiflow repository
-BRANCH_COSIFLOW="v0.2.0"
-
 # ==============================================
 # 1. Download the cosiflow repository
 # ==============================================
-cd $COSI_PATH
+cd "$COSI_PATH" || error "Failed to cd to $COSI_PATH"
 if [ ! -d "$COSI_PATH/cosiflow" ]; then
     git clone https://github.com/cositools/cosiflow.git
     # checkout the default branch for the cosiflow repository
-    cd $COSI_PATH/cosiflow
-    git checkout $BRANCH_COSIFLOW
+    cd "$COSI_PATH/cosiflow" || error "Failed to cd to $COSI_PATH/cosiflow"
+    git checkout "$COSIFLOW_REF" || error "Failed to checkout Cosiflow ref $COSIFLOW_REF"
 else
     log "Cosiflow repository already cloned"
 fi
@@ -144,8 +182,8 @@ log "Dockerfile.airflow modified with user and group ids: $USER_ID:$GROUP_ID"
 # ==============================================
 # 3. Configure the Airflow Environment Variables
 # ==============================================
-while IFS='|' read -r name default prompt pattern replacement_template; do
-    prompt_and_update_compose_var "$name" "$default" "$prompt" "$pattern" "$replacement_template"
+while IFS='|' read -r name default prompt pattern replacement_template input_mode; do
+    prompt_and_update_compose_var "$name" "$default" "$prompt" "$pattern" "$replacement_template" "$input_mode"
 done < <(map_compose_variables)
 
 read -p "Press Enter to continue"
