@@ -115,7 +115,7 @@ prompt_and_update_compose_var() {
 # ==============================================
 # 0. Parse the arguments
 # ==============================================
-COSIFLOW_REF="${COSIFLOW_REF:-v0.2.0}"
+COSIFLOW_REF="${COSIFLOW_REF:-dev}"
 
 # parse the arguments, long argument --cosi-path is provided, or short argument -c is provided:
 # if no argument is provided, use the default path
