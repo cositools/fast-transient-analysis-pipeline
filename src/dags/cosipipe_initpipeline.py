@@ -336,7 +336,7 @@ DATA_CHALLENGE_DEFAULTS = {
         # The DC4 GRB tutorials use legacy GRB simulations from the DC3 source
         # area together with DC4 response, orientation, and background products.
         "source": "COSI-SMEX/DC3/Data/Sources/GRB_bn090424592_3months_unbinned_data_filtered_with_SAAcut.fits.gz",
-        "background": "COSI-SMEX/DC4/Data/Backgrounds/Total_DC4_BG_3months_unbinned_data_timecut_GRB_bn090424592.fits.gz",
+        "background": "COSI-SMEX/DC4/Data/Backgrounds/Total_DC4_BG_3months_unbinned_data_filtered_with_SAAcut_withSAAbck.fits.gz",
     },
 }
 
@@ -405,9 +405,9 @@ with DAG(
             type="string",
             description="Wasabi background key. Use __default__ for the selected Data Challenge preset.",
         ),
-        "destination": Param(default="tsmap", enum=list(DEST_MAP.keys())),  
+        "destination": Param(default="tdrss", enum=list(DEST_MAP.keys())),  
         "eps_time": Param(
-            default=1, 
+            default=50, 
             type="number",
             description="Time in seconds for the pre and post-burst background cut around the source time " \
                         "window. Default is 1 second.",),

@@ -540,6 +540,7 @@ def build_custom(dag):
         },
         dag=dag,
     )
+    
     # Node 2. Duration_on_different_binning
     bgo_duration_on_bins = ExternalPythonOperator(
         task_id="Duration_on_different_binning",
@@ -551,6 +552,7 @@ def build_custom(dag):
         },
         dag=dag,
     )
+    
     # Node 3. Background_extraction_and_data_preparation
     bgo_background_extraction_and_prep = ExternalPythonOperator(
         task_id="Background_extraction_and_data_preparation",
@@ -562,6 +564,7 @@ def build_custom(dag):
         },
         dag=dag,
     )
+    
     # Node 4. Light_Curve_generation
     bgo_light_curve_generation = ExternalPythonOperator(
         task_id="Light_Curve_generation",
@@ -573,6 +576,7 @@ def build_custom(dag):
         },
         dag=dag,
     )
+    
     # Node 5. Significance_Analysis (Li&Ma)
     bgo_significance_analysis = ExternalPythonOperator(
         task_id="Significance_Analysis",
@@ -586,10 +590,13 @@ def build_custom(dag):
         },
         dag=dag,
     )
+    
     # Localization block. Chi2 and DL are placeholders; bc_tools is the active
     # branch and runs in nimcosipy because it needs cosipy.nonimaging.
+    
     # Node 6. Localization_Chi2
     bgo_localization_chi2 = EmptyOperator(task_id="Localization_Chi2", dag=dag)
+    
     # Node 7. Localization_bc_tools
     bgo_localization_bc_tools = ExternalPythonOperator(
         task_id="Localization_bc_tools",
@@ -604,13 +611,16 @@ def build_custom(dag):
         do_xcom_push=True,
         dag=dag,
     )
+    
     # Node 8. Localization_DL
     bgo_localization_dl = EmptyOperator(task_id="Localization_DL", dag=dag)
 
     # Node 9. Localization_Results
     bgo_localization_results = EmptyOperator(task_id="Localization_Results", dag=dag)
+    
     # Node 10. Classification_BGO
     bgo_classification = EmptyOperator(task_id="Classification_BGO", dag=dag)
+    
     # Node 11. GCN_BGO
     bgo_gcn = PythonOperator(
         task_id="GCN_BGO",
@@ -630,7 +640,10 @@ def build_custom(dag):
         dag=dag,
     )
 
-    # Diagram wiring. XCom carries small result dictionaries; large products and
+    # ==============================================
+    # 4. Diagram wiring
+    # ==============================================
+    # XCom carries small result dictionaries; large products and
     # shared metadata stay on disk in pipeline_config.yaml.
     bgo_pre_processing >> bgo_duration_on_bins
     bgo_duration_on_bins >> [
@@ -650,37 +663,58 @@ def build_custom(dag):
 
     
 
-
+# ==============================================
+# 5. DAG definition
+# ==============================================
 with COSIDAG(
+    # DAG identifier - associated with the Airflow Variables COSIDAG_PROCESSED::{dag_id}
     dag_id="cosidag_BGO",
+    # DAG scheduling
     start_date=datetime(2025, 1, 1),
+    # DAG scheduling interval (None = manual trigger only)
     schedule_interval=None,
     catchup=False,
+    # DAG description
     description="BGO branch of the fast transient pipeline",
+    # Levels of subdirectories to monitor for new data products. Only the basename of the monitored directories is used in the DAG
     level=3,
     only_basename="products",
+    # Number of seconds to wait for new files before considering the monitored directory idle. If idle, the DAG will trigger a run
     idle_seconds=5,
+    # Minimum number of files to trigger a run. If the number of files is less than this, the DAG will not trigger a run
     min_files=1,
+    # Maximum number of files to trigger a run. If the number of files is more than this, the DAG will not trigger a new run
     max_active_runs=2,
+    # Maximum number of tasks to run concurrently. If the number of tasks is more than this, the DAG will not trigger new tasks until some tasks finish
     max_active_tasks=32,
+    # Maximum number of concurrent DAG runs. If the number of DAG runs is more than this, the DAG will not trigger new runs until some runs finish
     concurrency=32,
+    # Query string to filter data folders by date.
     date_queries=f"<={datetime.now().strftime('%Y%m%d')}",
+    # Policy to select the most recent folder in a monitored directory. Options: "latest_mtime" (default), "latest_ctime", "latest_atime", "latest_name"
     select_policy="latest_mtime",
     file_patterns={
         # Fast transient inputs. The orientation pattern excludes science files
         # containing GRB/BG and accepts both current FITS and legacy ORI files.
         "lightcurve_file": "*.npz",
+        # Lookup tables for BGO localization
         "soft_lut_file": "soft_lut_*.pkl",
         "medium_lut_file": "medium_lut_*.pkl",
         "hard_lut_file": "hard_lut_*.pkl",
+        # Orientation file must end with .fits or .ori and must not contain "GRB" or "BG".
         "orientation_file": "regex:^(?!.*(?:GRB|BG)).*\\.(?:fits|ori)$",
     },
+    # Automatically retrigger the DAG if new files are detected in the monitored directories. If False, the DAG will only trigger once 
     auto_retrig=True,
+    # Render templates as native Python objects instead of strings. This allows for more complex data structures to be passed between tasks.
     render_template_as_native_obj=True,
+    # Custom DAG build function
     build_custom=build_custom,
+    # Monitoring folders to watch for new data products
     monitoring_folders=[
         "/home/gamma/workspace/data/tdrss",
     ],
+    # DAG tags for categorization in the Airflow UI
     tags=["cosidag", "fast", "pipe", "phase1", "bgo"],
 ) as dag:
     pass

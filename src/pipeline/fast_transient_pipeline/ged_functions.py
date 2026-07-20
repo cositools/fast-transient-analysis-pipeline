@@ -580,9 +580,6 @@ def preprocess_data(
 def unbinned_light_curve_generation(config_path: str) -> str:
     """
     Generate an ARM-gated unbinned light curve from event FITS input.
-
-    This is a YAML-driven reimplementation of fast_grb/fast_ops_grb_timeseries.py.
-    It preserves the plotting/diagnostics logic while integrating with pipeline config.
     """
     import os
 

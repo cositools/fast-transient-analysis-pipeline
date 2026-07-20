@@ -433,6 +433,7 @@ def build_custom(dag):
         },
         dag=dag,
     )
+
     # Node 3. Data_Binning
     ged_data_binning = ExternalPythonOperator(
         task_id="Data_Binning",
@@ -456,6 +457,7 @@ def build_custom(dag):
         },
         dag=dag,
     )
+
     # Node 4.1. Skymap_unbinned (HEALPix significance map)
     ged_skymap_unbinned = ExternalPythonOperator(
         task_id="Skymap_unbinned",
@@ -490,6 +492,7 @@ def build_custom(dag):
         },
         dag=dag,
     )
+
     # Node 7. Light_Curve
     ged_light_curve = ExternalPythonOperator(
         task_id="Light_Curve",
@@ -501,6 +504,7 @@ def build_custom(dag):
         },
         dag=dag,
     )
+
     # Node 8. Duration
     ged_duration = ExternalPythonOperator(
         task_id="Duration",
@@ -512,10 +516,13 @@ def build_custom(dag):
         },
         dag=dag,
     )
+
     # Node 9. Spectral_Analysis
     ged_spectral_analysis = EmptyOperator(task_id="Spectral_Analysis", dag=dag)
+    
     # Node 10. Classification_GeD
     ged_classification = EmptyOperator(task_id="Classification_GeD", dag=dag)
+    
     # Node 11. GCN_GeD
     ged_gcn = PythonOperator(
         task_id="GCN_GeD",
@@ -534,6 +541,9 @@ def build_custom(dag):
         dag=dag,
     )
 
+    # ==============================================
+    # 4. Diagram wiring
+    # ==============================================
     # Diagram wiring. Large data products stay on disk; XCom carries config
     # paths and compact result payloads.
     ged_pre_processing >> [ged_unbinned_light_curve_generation, ged_data_binning]
@@ -544,35 +554,55 @@ def build_custom(dag):
         node >> ged_gcn
 
 
+# ==============================================
+# 5. DAG definition
+# ==============================================
 with COSIDAG(
+    # DAG identifier - associated with the Airflow Variables COSIDAG_PROCESSED::{dag_id}
     dag_id="cosidag_GeD",
+    # DAG scheduling
     start_date=datetime(2025, 1, 1),
+    # DAG scheduling interval (None = manual trigger only)
     schedule_interval=None,
     catchup=False,
+    # DAG description
     description="GeD branch of the fast transient pipeline",
+    # Levels of subdirectories to monitor for new data products. Only the basename of the monitored directories is used in the DAG
     level=3,
     only_basename="products",
+    # Number of seconds to wait for new files before considering the monitored directory idle. If idle, the DAG will trigger a run
     idle_seconds=5,
+    # Minimum number of files to trigger a run. If the number of files is less than this, the DAG will not trigger a run
     min_files=1,
+    # Maximum number of files to trigger a run. If the number of files is more than this, the DAG will not trigger a new run
     max_active_runs=2,
+    # Maximum number of tasks to run concurrently. If the number of tasks is more than this, the DAG will not trigger new tasks until some tasks finish
     max_active_tasks=32,
+    # Maximum number of concurrent DAG runs. If the number of DAG runs is more than this, the DAG will not trigger new runs until some runs finish
     concurrency=32,
-    date_queries=f"=={datetime.now().strftime('%Y%m%d')}",
+    # Query string to filter data folders by date.
+    date_queries=f"<={datetime.now().strftime('%Y%m%d')}",
+    # Policy to select the most recent folder in a monitored directory. Options: "latest_mtime" (default), "latest_ctime", "latest_atime", "latest_name"
     select_policy="latest_mtime",
     file_patterns={
-        # Fast transient inputs.
+        # Source file must contain "GRB" or "grb" and end with .fits.
         "grb_file": "*[Gg][Rr][Bb]*.fits*",
+        # Background file must contain "BG" or "bg" and end with .fits.
         "background_file": "*[Bb][Gg]*_window.fits*",
         # Orientation file must end with .fits or .ori and must not contain "GRB" or "BG".
         "orientation_file": "regex:^(?!.*(?:GRB|BG)).*\\.(?:fits|ori)$",
         # Response file must end with .h5 and must not contain "GRB" or "BG".
         "response_file": "regex:^(?!.*(?:GRB|BG)).*\\.h5$",
     },
+    # Automatically retrigger the DAG if new files are detected in the monitored directories. If False, the DAG will only trigger once 
     auto_retrig=True,
+    # Custom DAG build function
     build_custom=build_custom,
+    # Monitoring folders to watch for new data products
     monitoring_folders=[
         "/home/gamma/workspace/data/tdrss",
     ],
+    # DAG tags for categorization in the Airflow UI
     tags=["cosidag", "fast", "pipe", "phase1", "ged"],
 ) as dag:
     pass
