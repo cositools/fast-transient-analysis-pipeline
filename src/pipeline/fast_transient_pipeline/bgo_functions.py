@@ -831,67 +831,6 @@ def localize_bctools(
         z_pointing = SkyCoord(data[:, 4][i] * u.deg, data[:, 3][i] * u.deg, frame="galactic")
         return Attitude.from_axes(x=x_pointing, z=z_pointing, frame="galactic")
 
-    def _counts_in_lut_order(counts: np.ndarray, lut) -> np.ndarray:
-        # BGO light-curve panels are stored in DAG order, while LUT rows are
-        # keyed by detector labels. Reordering by label prevents silent swaps.
-        source_labels = ["BGO_Z0", "BGO_Z1", "BGO_X0", "BGO_X1", "BGO_Y0", "BGO_Y1"]
-        counts_by_label = {
-            label: float(value) for label, value in zip(source_labels, np.asarray(counts, dtype=float))
-        }
-        try:
-            labels = [str(label) for label in lut.labels]
-        except AttributeError:
-            return np.asarray(counts, dtype=float)
-        return np.asarray([counts_by_label[label] for label in labels], dtype=float)
-
-    def _localize_healpix_loctables(loctables, s_counts, b_counts, conf_level=0.9):
-        # Some current LUT pickles are already sky HEALPix localization tables.
-        # Those do not expose LocalLocTable.to_skyloctable(), so run the BC-tools
-        # likelihood directly instead of going through ACSLocalizerBCT.localize().
-        results = []
-        coordsys = "galactic"
-
-        for label, lut in loctables.items():
-            lut_s_counts = _counts_in_lut_order(s_counts, lut)
-            lut_b_counts = _counts_in_lut_order(b_counts, lut)
-
-            lut.set_background(lut_b_counts)
-            lut.set_data(lut_s_counts)
-
-            ts_map = TSMap(nside=getattr(lut, "nside", nside), coordsys=coordsys)
-            likelihood = NormLocLike(lut)
-            ts_map.compute(likelihood)
-
-            ts_value = float(np.max(ts_map))
-            best = ts_map.best_loc()
-            cont_area = ts_map.error_area(cont=conf_level).to(u.deg**2)
-            eq_radius = np.sqrt(cont_area / np.pi).to(u.deg)
-
-            best_gal = best.galactic
-            results.append({
-                "theta_out": float(90.0 - best_gal.b.deg),
-                "phi_out": float(best_gal.l.deg),
-                "l": float(best_gal.l.deg),
-                "b": float(best_gal.b.deg),
-                "label": label,
-                "ts_map": ts_map,
-                "ts_value": ts_value,
-                "sqrt_ts": float(np.sqrt(ts_value)),
-                "cont_area_deg2": float(cont_area.value),
-                "eq_radius_deg": float(eq_radius.value),
-                "ra_deg": float(best.icrs.ra.deg),
-                "dec_deg": float(best.icrs.dec.deg),
-            })
-
-        return max(results, key=lambda item: item["ts_value"])
-
-    for name, path in [
-        ("soft_lut", soft_lut_path),
-        ("medium_lut", medium_lut_path),
-        ("hard_lut", hard_lut_path),
-    ]:
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"{name} not found: {path}")
 
     print("[localize_grb] Initializing BGOLocalizerBCT...")
     nside = 64
@@ -910,32 +849,33 @@ def localize_bctools(
 
     # Use the Bayesian-Blocks signal start as the timestamp for the attitude row.
     time_grb = tstart
+    print("[localize_grb] tstart (GRB time):", time_grb)
     attitude = _attitude_from_orientation_file(orientation_file, time_grb)
 
     # LocalLocTable inputs need attitude projection first; HealpixLocTable inputs
     # are already on a sky grid and can be evaluated directly.
-    if all(hasattr(lut, "to_skyloctable") for lut in localizer.loctables.values()):
-        result = localizer.localize(s_counts_arr, b_counts_arr, attitude=attitude)
-    else:
-        print("[localize_grb] LUTs are already HealpixLocTable objects; using direct TSMap localization.")
-        result = _localize_healpix_loctables(localizer.loctables, s_counts_arr, b_counts_arr)
-    if "ra_deg" not in result or "dec_deg" not in result:
-        best_coord = SkyCoord(l=result["l"] * u.deg, b=result["b"] * u.deg, frame="galactic")
-        result["ra_deg"] = float(best_coord.icrs.ra.deg)
-        result["dec_deg"] = float(best_coord.icrs.dec.deg)
-    print(
-        result["label"],
-        result["sqrt_ts"],
-        result["ra_deg"],
-        result["dec_deg"],
-        result["eq_radius_deg"],
-    )
-    # Keep the historical theta/phi printout for logs while the result payload
-    # stores sky coordinates as RA/Dec and Galactic l/b.
-    theta_deg, phi_deg = ra_dec_to_theta_phi(result["ra_deg"],result["dec_deg"])
-    print(f"Theta: {theta_deg}, Phi: {phi_deg}")
-
-    # Save the localization plot without opening an interactive window inside Airflow.
-    localizer.plot(result, show=False, save_path=f"{plots_dir}/bgo_localization.png")
-
+    result = localizer.localize(s_counts_arr, b_counts_arr, attitude=attitude)
+    print("[localize_grb] Localization result:", result)
+    # The localization result contains the best-fit Galactic coordinates (l, b) and a TS map.
+    best_loc = SkyCoord(l=result['l']*u.deg, b=result['b']*u.deg, frame="galactic")
+    # Plot the TS map with the best-fit location marked.
+    ts_map = result["ts_map"]
+    # Plot the TS map with the best-fit location marked.
+    img, ax = ts_map.plot(cont=0.9)
+    ax.grid(alpha=0.5)
+    ax.scatter(
+        best_loc.l.to(u.deg).value,#best_loc.icrs.ra.to(u.deg).value,
+        best_loc.b.to(u.deg).value,#best_loc.icrs.dec.to(u.deg).value,
+        color="blue",
+        transform=ax.get_transform("world"),
+        s=2,
+        label="Best localization"
+        )
+    # Add legend 
+    ax.legend(loc="upper right", frameon=True)
+    # Save the plot
+    plot_path = plots_dir / "bgo_localization.png"
+    fig = ax.figure
+    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
     return str(plots_dir)

@@ -698,9 +698,9 @@ with COSIDAG(
         # containing GRB/BG and accepts both current FITS and legacy ORI files.
         "lightcurve_file": "*.npz",
         # Lookup tables for BGO localization
-        "soft_lut_file": "soft_lut_*.pkl",
-        "medium_lut_file": "medium_lut_*.pkl",
-        "hard_lut_file": "hard_lut_*.pkl",
+        "soft_lut_file": "soft_*.pkl",
+        "medium_lut_file": "medium_*.pkl",
+        "hard_lut_file": "hard_*.pkl",
         # Orientation file must end with .fits or .ori and must not contain "GRB" or "BG".
         "orientation_file": "regex:^(?!.*(?:GRB|BG)).*\\.(?:fits|ori)$",
     },
