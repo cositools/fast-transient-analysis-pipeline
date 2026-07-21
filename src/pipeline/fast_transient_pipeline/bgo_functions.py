@@ -810,7 +810,7 @@ def localize_bctools(
             print("Nearest Z pointing (l, b):", z_l_deg, z_b_deg)
             x_pointing = SkyCoord(x_l_deg * u.deg, x_b_deg * u.deg, frame="galactic")
             z_pointing = SkyCoord(z_l_deg * u.deg, z_b_deg * u.deg, frame="galactic")
-            return Attitude.from_axes(x=x_pointing, z=z_pointing, frame="galactic")
+            return Attitude.from_axes(x=x_pointing, z=z_pointing, frame="icrs")
 
         data = np.loadtxt(
             path,
@@ -828,7 +828,7 @@ def localize_bctools(
         i = min(idx + 1, len(data) - 1)
         x_pointing = SkyCoord(data[:, 2][i] * u.deg, data[:, 1][i] * u.deg, frame="galactic")
         z_pointing = SkyCoord(data[:, 4][i] * u.deg, data[:, 3][i] * u.deg, frame="galactic")
-        return Attitude.from_axes(x=x_pointing, z=z_pointing, frame="galactic")
+        return Attitude.from_axes(x=x_pointing, z=z_pointing, frame="icrs")
 
 
     print("[localize_grb] Initializing BGOLocalizerBCT...")
@@ -853,6 +853,8 @@ def localize_bctools(
 
     # LocalLocTable inputs need attitude projection first; HealpixLocTable inputs
     # are already on a sky grid and can be evaluated directly.
+    print("s_counts_arr:", s_counts_arr)
+    print("b_counts_arr:", b_counts_arr)
     result = localizer.localize(s_counts_arr, b_counts_arr, attitude=attitude)
     print("[localize_grb] Localization result:", result)
     # The localization result contains the best-fit Galactic coordinates (l, b) and a TS map.
@@ -865,7 +867,7 @@ def localize_bctools(
     ax.scatter(
         best_loc.l.to(u.deg).value,#best_loc.icrs.ra.to(u.deg).value,
         best_loc.b.to(u.deg).value,#best_loc.icrs.dec.to(u.deg).value,
-        color="blue",
+        color="red",
         transform=ax.get_transform("world"),
         s=2,
         label="Best localization"
