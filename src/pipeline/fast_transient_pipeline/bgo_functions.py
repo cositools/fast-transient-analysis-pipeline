@@ -788,7 +788,6 @@ def localize_bctools(
     import numpy as np
     from astropy.coordinates import SkyCoord
     import astropy.units as u
-    from bctools.loc import NormLocLike, TSMap
     from scoords import Attitude
 
     def _attitude_from_orientation_file(path: str, time_grb: float):
