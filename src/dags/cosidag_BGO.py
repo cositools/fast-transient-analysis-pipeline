@@ -38,7 +38,7 @@ def build_custom(dag):
     # ==============================================
     # The COSIDAG sensor resolves concrete file paths and exposes them through
     # XCom. Preprocessing persists those paths into pipeline_config.yaml.
-    LIGHTCURVE_FILE = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='lightcurve_file') }}"
+    GRB_FITS_FILE = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='grb_fits_file') }}"
     SOFT_LUT = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='soft_lut_file') }}"
     MEDIUM_LUT = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='medium_lut_file') }}"
     HARD_LUT = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='hard_lut_file') }}"
@@ -49,7 +49,7 @@ def build_custom(dag):
             "lightcurve_key": "light_curve",
             "p0": 10e-5,
             "is_rate": False,
-            "panels": ["z0", "z1", "x0", "x1", "y0", "y1"],
+            "panels": ["z1", "z0", "x1", "x0", "y1", "y0"],
         },
         "background": {
             "buffer": 0.0,
@@ -65,7 +65,7 @@ def build_custom(dag):
         },
         "localization_bctools": {
             "nside": 64,
-            "counts_order": ["BGO_X0", "BGO_X1", "BGO_Y0", "BGO_Y1", "BGO_Z0", "BGO_Z1"],
+            "counts_order": ["BGO_Z1", "BGO_Z0", "BGO_X1", "BGO_X0", "BGO_Y1", "BGO_Y0"],
             "output_plot_name": "bgo_localization.png",
         },
     }
@@ -75,245 +75,103 @@ def build_custom(dag):
     # ExternalPythonOperator serializes these callables into temporary scripts.
     # Imports therefore stay inside the callable so they resolve in the selected
     # virtual environment, not in the scheduler environment.
-    # ---- 3.1. _run_preprocessing
-    def _run_preprocessing(
-        lib_dir: str,
-        lightcurve_file: str,
-        soft_lut_path: str,
-        medium_lut_path: str,
-        hard_lut_path: str,
-        orientation_file: str,
-        analysis_config: dict,
-        trigger_time: str,
+    # ---- 3.1 data_preparation from .FITS
+    def _run_extract_source_data(
+    lib_dir: str,
+    grb_fits_path: str,
+    soft_lut_path: str,
+    medium_lut_path: str,
+    hard_lut_path: str,
+    orientation_file: str,
+    trigger_time: str,
+    analysis_config: dict,
     ):
         import os
         import sys
+        from pathlib import Path
 
-        for name, path in [
-            ("lightcurve_file", lightcurve_file),
-            ("soft_lut_file", soft_lut_path),
-            ("medium_lut_file", medium_lut_path),
-            ("hard_lut_file", hard_lut_path),
-            ("orientation_file", orientation_file),
-        ]:
-            if not path or not os.path.exists(path):
-                raise FileNotFoundError(f"{name} not found or missing from resolve_inputs: {path}")
+        if not grb_fits_path or not os.path.exists(grb_fits_path):
+            raise FileNotFoundError(
+                f"GRB FITS file not found from resolve_inputs: {grb_fits_path}"
+            )
 
         sys.path.insert(0, lib_dir)
-        from bgo_functions import preprocess_data
 
-        # Preprocessing is the only task that builds the canonical YAML state
-        # from COSIDAG inputs. Later tasks receive this path and update it.
-        payload = {
-            "lightcurve_path": lightcurve_file,
+        from bgo_functions import extract_source_data_from_fits
+
+        grb_file_name = Path(grb_fits_path).stem
+        output_dir = str(Path(grb_fits_path).parent / "plots")
+
+        pipeline_config = {
+            "pipeline_name": "BGO",
+            "cosidag_id": "cosidag_BGO",
+            "trigger_time": trigger_time,
+            "lightcurve_path": grb_fits_path,
+            "lightcurve_file": grb_fits_path,
             "soft_lut_path": soft_lut_path,
             "medium_lut_path": medium_lut_path,
             "hard_lut_path": hard_lut_path,
             "orientation_path": orientation_file,
-            "pipeline_name": "BGO",
-            "cosidag_id": "cosidag_BGO",
-            "trigger_time": trigger_time,
             "analysis_config": analysis_config,
-            "input_resolved": {
-                "lightcurve_path": lightcurve_file,
-                "soft_lut_path": soft_lut_path,
-                "medium_lut_path": medium_lut_path,
-                "hard_lut_path": hard_lut_path,
-                "orientation_path": orientation_file,
-            },
         }
-        return preprocess_data(payload)
-    
-    # ---- 3.2. _run_get_duration
-    def _run_get_duration(lib_dir: str, config_path: str):
-        import sys
-        import os
-        import numpy as np
-        import yaml
 
-        if not config_path or not os.path.exists(config_path):
-            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
-
-        sys.path.insert(0, lib_dir)
-        import fast_helper_functions as fhf
-        from bgo_functions import get_duration
-        from bgo_functions import _record_pipeline_task
-        from gcn.query import query_relevant_grb_notices
-
-        with open(config_path, "r") as f:
-            config = yaml.load(f, Loader=yaml.FullLoader) or {}
-        lightcurve_file = config.get("lightcurve_path") or config.get("lightcurve_file")
-        duration_config = config.get("duration", {})
-        lightcurve_key = duration_config.get("lightcurve_key", "light_curve")
-        # The BGO light-curve NPZ stores the multi-panel array under a
-        # configurable key so future challenge products can keep the same DAG.
-        lightcurve = np.load(lightcurve_file)[lightcurve_key]
-        lc_timebins, bb_lc_timebins, tstart, tstop, t90, t90_err_low, t90_err_high = get_duration(
-            lightcurve,
-            p0=float(duration_config.get("p0", 10e-5)),
-            isRate=bool(duration_config.get("is_rate", False)),
-            panels=duration_config.get("panels", ["z0", "z1", "x0", "x1", "y0", "y1"]),
-        )
-        result = {
-            "lc_timebins": lc_timebins,
-            "bb_lc_timebins": bb_lc_timebins,
-            "tstart": float(tstart),
-            "tstop": float(tstop),
-            "t90": float(t90),
-            "t90_err_low": float(t90_err_low),
-            "t90_err_high": float(t90_err_high),
-            "lightcurve_file": lightcurve_file,
-        }
-        gcn_query_result = query_relevant_grb_notices(
-            config=config,
-            task_id="Duration_on_different_binning",
-            tstart=tstart,
-            tstop=tstop,
-        )
-        result["gcn_notice_query"] = gcn_query_result
-        config["duration_result"] = result
-        config.setdefault("gcn_notice_queries", {})["Duration_on_different_binning"] = gcn_query_result
-        _record_pipeline_task(
-            config,
-            task_id="Duration_on_different_binning",
-            task_name="Duration on different binning",
-            input_data={
-                "config_path": config_path,
-                "lightcurve_path": lightcurve_file,
-                "lightcurve_key": lightcurve_key,
-                "duration": duration_config,
-            },
-            output_data=result,
-        )
-        fhf._save_yaml(config_path, config)
-        return result
-
-    # ---- 3.3. _run_background_extraction
-    def _run_background_extraction(
-        lib_dir: str,
-        config_path: str,
-    ):
-        import sys
-        import os
-        import yaml
-
-        if not config_path or not os.path.exists(config_path):
-            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
-
-        sys.path.insert(0, lib_dir)
-        import fast_helper_functions as fhf
-        from bgo_functions import background_extraction_and_data_preparation
-        from bgo_functions import _record_pipeline_task
-
-        with open(config_path, "r") as f:
-            config = yaml.load(f, Loader=yaml.FullLoader) or {}
-        duration_result = config.get("duration_result", {})
-        background_config = config.get("background", {})
-        # Background fitting consumes the serialized TimeBins produced by the
-        # duration task and returns compact per-panel count arrays.
-        signal_counts, background_counts, net_counts = background_extraction_and_data_preparation(
-            duration_result["lc_timebins"],
-            float(duration_result["tstart"]),
-            float(duration_result["tstop"]),
-            buffer=float(background_config.get("buffer", 0.0)),
-            order=int(background_config.get("order", 2)),
+        (
+            s_counts,
+            b_counts,
+            grb_time,
+            bblocks_analysis_results,
+            config_path,
+        ) = extract_source_data_from_fits(
+            pipeline_config=pipeline_config,
+            grb_fits_path=grb_fits_path,
+            grb_file_name=grb_file_name,
+            panels=["z1", "z0", "x1", "x0", "y1", "y0"],
+            plot=True,
+            save_plot=True,
+            plot_counts=False,
+            output_dir=output_dir,
         )
 
-        lightcurve_file = config.get("lightcurve_path") or config.get("lightcurve_file")
-        result = {
-            "signal_counts": signal_counts.tolist(),
-            "background_counts": background_counts.tolist(),
-            "net_counts": net_counts.tolist(),
-            "lightcurve_file": lightcurve_file,
-            "tstart": float(duration_result["tstart"]),
-            "tstop": float(duration_result["tstop"]),
-        }
-        config["background_result"] = result
-        _record_pipeline_task(
-            config,
-            task_id="Background_extraction_and_data_preparation",
-            task_name="Background extraction and data preparation",
-            input_data={
-                "config_path": config_path,
-                "duration_result": duration_result,
-                "background": background_config,
-            },
-            output_data=result,
-        )
-        fhf._save_yaml(config_path, config)
-        return result
-
-    # ---- 3.4. _run_light_curve_generation
-    def _run_light_curve_generation(
-        lib_dir: str,
-        config_path: str,
-    ):
-        import sys
-        import os
-        import yaml
-
-        if not config_path or not os.path.exists(config_path):
-            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
-
-        sys.path.insert(0, lib_dir)
-        import fast_helper_functions as fhf
-        from bgo_functions import light_curve_generation
-        from bgo_functions import _record_pipeline_task
-
-        with open(config_path, "r") as f:
-            config = yaml.load(f, Loader=yaml.FullLoader) or {}
-        lightcurve_file = config.get("lightcurve_path") or config.get("lightcurve_file")
-        duration_result = config.get("duration_result", {})
-        light_curve_config = config.get("light_curve", {})
-        analysis_dir = os.path.dirname(os.path.abspath(lightcurve_file))
-        plot_counts_path, plot_background_path = light_curve_generation(
-            bayes_output=(
-                duration_result["lc_timebins"],
-                duration_result["bb_lc_timebins"],
-                float(duration_result["tstart"]),
-                float(duration_result["tstop"]),
-                float(duration_result["t90"]),
-                float(duration_result["t90_err_low"]),
-                float(duration_result["t90_err_high"]),
+        return {
+            "grb_fits_path": grb_fits_path,
+            "grb_file_name": grb_file_name,
+            "config_path": config_path,
+            "signal_counts": s_counts.tolist(),
+            "background_counts": b_counts.tolist(),
+            "grb_time": float(grb_time),
+            "signal_tstart": float(
+                bblocks_analysis_results["signal_tstart"]
             ),
-            analysis_dir=analysis_dir,
-            panel=light_curve_config.get("panel"),
-            show=bool(light_curve_config.get("show", False)),
-        )
-
-        result = {
-            "lightcurve_file": lightcurve_file,
-            "analysis_dir": analysis_dir,
-            "plots_dir": os.path.join(analysis_dir, "plots"),
-            "plot_counts_path": plot_counts_path,
-            "plot_background_path": plot_background_path,
-            "tstart": float(duration_result["tstart"]),
-            "tstop": float(duration_result["tstop"]),
-            "t90": float(duration_result["t90"]),
-            "t90_err_low": float(duration_result["t90_err_low"]),
-            "t90_err_high": float(duration_result["t90_err_high"]),
+            "signal_tstop": float(
+                bblocks_analysis_results["signal_tstop"]
+            ),
+            "t90": float(
+                bblocks_analysis_results["t90"]
+            ),
+            "t90_err_low": float(
+                bblocks_analysis_results["t90_err_low"]
+            ),
+            "t90_err_high": float(
+                bblocks_analysis_results["t90_err_high"]
+            ),
+            "significance": float(
+                bblocks_analysis_results["significance"]
+            ),
+            "significance_peak": float(
+                bblocks_analysis_results["significance_peak"]
+            ),
+            "plots_dir": output_dir,
         }
-        config["lightcurve_result"] = result
-        _record_pipeline_task(
-            config,
-            task_id="Light_Curve_generation",
-            task_name="Light Curve generation",
-            input_data={
-                "config_path": config_path,
-                "duration_result": duration_result,
-                "light_curve": light_curve_config,
-            },
-            output_data=result,
-        )
-        fhf._save_yaml(config_path, config)
-        return result
+        
 
     # ---- 3.5. _run_localization_bctools
     def _run_localization_bctools(
         lib_dir: str,
-        config_path: str,
-        background_result=None,
-        duration_result=None,
+        extract_result=None,
+        soft_lut_path: str = None,
+        medium_lut_path: str = None,
+        hard_lut_path: str = None,
+        orientation_file: str = None,
     ):
         import ast
         import sys
@@ -321,165 +179,150 @@ def build_custom(dag):
         import numpy as np
         import yaml
 
-        if not config_path or not os.path.exists(config_path):
-            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
-
         sys.path.insert(0, lib_dir)
-        import fast_helper_functions as fhf
+
         from bgo_functions import localize_bctools
-        from bgo_functions import _record_pipeline_task
 
         def _as_mapping(value):
-            # Airflow native rendering usually preserves dicts, but templated
-            # XComs can still arrive as strings depending on operator context.
             if isinstance(value, dict):
                 return value
+
             if isinstance(value, str) and value:
-                for loader in (yaml.safe_load, ast.literal_eval):
+                for loader in (
+                    yaml.safe_load,
+                    ast.literal_eval,
+                ):
                     try:
                         loaded = loader(value)
                     except Exception:
                         continue
+
                     if isinstance(loaded, dict):
                         return loaded
+
             return {}
 
-        with open(config_path, "r") as f:
-            config = yaml.load(f, Loader=yaml.FullLoader) or {}
-        lightcurve_file = config.get("lightcurve_path") or config.get("lightcurve_file")
-        background_result = _as_mapping(background_result) or config.get("background_result", {})
-        duration_result = _as_mapping(duration_result) or config.get("duration_result", {})
-        soft_lut_path = config.get("soft_lut_path")
-        medium_lut_path = config.get("medium_lut_path")
-        hard_lut_path = config.get("hard_lut_path")
-        orientation_file = config.get("orientation_path")
+        extract_result = _as_mapping(extract_result)
+
         missing_keys = [
             key
-            for key in ["signal_counts", "background_counts"]
-            if key not in background_result
+            for key in [
+                "signal_counts",
+                "background_counts",
+                "grb_time",
+                "grb_fits_path",
+            ]
+            if key not in extract_result
         ]
+
         if missing_keys:
             raise KeyError(
-                "Missing keys from Background_extraction_and_data_preparation result: "
-                f"{missing_keys}"
+                f"Missing keys from extraction result: {missing_keys}"
             )
-        if "tstart" not in duration_result:
-            raise KeyError("Missing key from Duration_on_different_binning result: tstart")
-        data_folder = os.path.dirname(os.path.abspath(lightcurve_file))
-        # Pass upstream XCom payloads directly to avoid depending on the latest
-        # writer of pipeline_config.yaml when parallel branches finish close together.
+
+        data_folder = os.path.dirname(
+            os.path.abspath(
+                extract_result["grb_fits_path"]
+            )
+        )
+
         output_dir = localize_bctools(
+            pipeline_config=extract_result["config_path"],
             data_folder=data_folder,
             soft_lut_path=soft_lut_path,
             medium_lut_path=medium_lut_path,
             hard_lut_path=hard_lut_path,
             orientation_file=orientation_file,
-            s_counts_arr=np.asarray(background_result["signal_counts"]),
-            b_counts_arr=np.asarray(background_result["background_counts"]),
-            tstart=float(duration_result["tstart"]),
+            s_counts_arr=np.asarray(
+                extract_result["signal_counts"],
+                dtype=float,
+            ),
+            b_counts_arr=np.asarray(
+                extract_result["background_counts"],
+                dtype=float,
+            ),
+            tstart=float(
+                extract_result["grb_time"]
+            ),
         )
 
         result = {
-            "lightcurve_file": lightcurve_file,
+            "grb_fits_path": extract_result["grb_fits_path"],
             "data_folder": output_dir,
             "soft_lut_path": soft_lut_path,
             "medium_lut_path": medium_lut_path,
             "hard_lut_path": hard_lut_path,
             "localization_plots_dir": output_dir,
         }
-        config["localization_result"] = result
-        _record_pipeline_task(
-            config,
-            task_id="Localization_bc_tools",
-            task_name="Localization bc tools",
-            input_data={
-                "config_path": config_path,
-                "background_result": background_result,
-                "duration_result": duration_result,
-                "soft_lut_path": soft_lut_path,
-                "medium_lut_path": medium_lut_path,
-                "hard_lut_path": hard_lut_path,
-                "orientation_path": orientation_file,
-            },
-            output_data=result,
-        )
-        fhf._save_yaml(config_path, config)
+
         return result
 
     # ---- 3.6. _run_significance_analysis
     def _run_significance_analysis(
         lib_dir: str,
-        config_path: str,
-        background_result=None,
-        duration_result=None,
+        extract_result=None,
     ):
         import ast
         import sys
-        import os
         import numpy as np
         import yaml
 
-        if not config_path or not os.path.exists(config_path):
-            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
-
         sys.path.insert(0, lib_dir)
-        import fast_helper_functions as fhf
+
         from bgo_functions import significance_analysis
-        from bgo_functions import _record_pipeline_task
 
         def _as_mapping(value):
-            # See localization wrapper: tolerate both native dicts and templated
-            # string representations from XCom.
+            # Tolerate both native dictionaries and templated string
+            # representations received from Airflow XCom.
             if isinstance(value, dict):
                 return value
+
             if isinstance(value, str) and value:
                 for loader in (yaml.safe_load, ast.literal_eval):
                     try:
                         loaded = loader(value)
                     except Exception:
                         continue
+
                     if isinstance(loaded, dict):
                         return loaded
+
             return {}
 
-        with open(config_path, "r") as f:
-            config = yaml.load(f, Loader=yaml.FullLoader) or {}
-        background_result = _as_mapping(background_result) or config.get("background_result", {})
-        duration_result = _as_mapping(duration_result) or config.get("duration_result", {})
+        extract_result = _as_mapping(extract_result)
+
         missing_keys = [
             key
-            for key in ["signal_counts", "background_counts"]
-            if key not in background_result
+            for key in [
+                "signal_counts",
+                "background_counts",
+                "t90",
+            ]
+            if key not in extract_result
         ]
+
         if missing_keys:
             raise KeyError(
-                "Missing keys from Background_extraction_and_data_preparation result: "
-                f"{missing_keys}"
+                f"Missing keys from extraction result: {missing_keys}"
             )
-        if "t90" not in duration_result:
-            raise KeyError("Missing key from Duration_on_different_binning result: t90")
+
         sigmas = significance_analysis(
-            np.asarray(background_result["signal_counts"]),
-            np.asarray(background_result["background_counts"]),
-            float(duration_result["t90"]),
+            extract_result["config_path"],
+            np.asarray(
+                extract_result["signal_counts"],
+                dtype=float,
+            ),
+            np.asarray(
+                extract_result["background_counts"],
+                dtype=float,
+            ),
+            float(extract_result["t90"]),
         )
 
         result = {
             "sigmas": sigmas.tolist(),
         }
-        config["significance_result"] = result
-        _record_pipeline_task(
-            config,
-            task_id="Significance_Analysis",
-            task_name="Significance Analysis",
-            input_data={
-                "config_path": config_path,
-                "background_result": background_result,
-                "duration_result": duration_result,
-            },
-            output_data=result,
-        )
-        fhf._save_yaml(config_path, config)
+
         return result
 
     # ---- 3.7. _queue_gcn_outbox_notice
@@ -520,108 +363,64 @@ def build_custom(dag):
     # ======================================================================
     # DAG-BGO (top row)
     # ======================================================================
-    # The BGO graph mirrors the Phase-1 diagram: duration fans out to plotting
-    # and background work; background feeds significance and localization.
-    # Node 1. PreProcessing_BGO
-    # bgo_pre_processing = EmptyOperator(task_id="PreProcessing_BGO", dag=dag)
-    bgo_pre_processing = ExternalPythonOperator(
-        task_id="PreProcessing_BGO",
-        python=EXTERNAL_PYTHON_COSIPY,
-        python_callable=_run_preprocessing,
-        op_kwargs={
-            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
-            "lightcurve_file": LIGHTCURVE_FILE,
-            "soft_lut_path": SOFT_LUT,
-            "medium_lut_path": MEDIUM_LUT,
-            "hard_lut_path": HARD_LUT,
-            "orientation_file": ORIENTATION_FILE,
-            "analysis_config": BGO_ANALYSIS_CONFIG,
-            "trigger_time": TRIGGER_TIME,
-        },
-        dag=dag,
-    )
-    
-    # Node 2. Duration_on_different_binning
-    bgo_duration_on_bins = ExternalPythonOperator(
-        task_id="Duration_on_different_binning",
-        python=EXTERNAL_PYTHON_BGO,
-        python_callable=_run_get_duration,
-        op_kwargs={
-            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
-            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_BGO', key='return_value') }}",
-        },
-        dag=dag,
-    )
-    
-    # Node 3. Background_extraction_and_data_preparation
-    bgo_background_extraction_and_prep = ExternalPythonOperator(
-        task_id="Background_extraction_and_data_preparation",
-        python=EXTERNAL_PYTHON_BGO,
-        python_callable=_run_background_extraction,
-        op_kwargs={
-            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
-            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_BGO', key='return_value') }}",
-        },
-        dag=dag,
-    )
-    
-    # Node 4. Light_Curve_generation
-    bgo_light_curve_generation = ExternalPythonOperator(
-        task_id="Light_Curve_generation",
-        python=EXTERNAL_PYTHON_BGO,
-        python_callable=_run_light_curve_generation,
-        op_kwargs={
-            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
-            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_BGO', key='return_value') }}",
-        },
-        dag=dag,
-    )
-    
-    # Node 5. Significance_Analysis (Li&Ma)
+    #The extraction task fans out to significance and localization branches.
+    # Node 1. BGO data extraction from FITS
+    bgo_extract_source_data = ExternalPythonOperator(
+    task_id="Extract_Source_Data_From_FITS",
+    python=EXTERNAL_PYTHON_NIMCOSIPY,
+    python_callable=_run_extract_source_data,
+    op_kwargs={
+        "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
+        "grb_fits_path": GRB_FITS_FILE,
+        "soft_lut_path": SOFT_LUT,
+        "medium_lut_path": MEDIUM_LUT,
+        "hard_lut_path": HARD_LUT,
+        "orientation_file": ORIENTATION_FILE,
+        "trigger_time": TRIGGER_TIME,
+        "analysis_config": BGO_ANALYSIS_CONFIG,
+    },
+    do_xcom_push=True,
+    dag=dag,
+)
+    # Node 2. Significance_Analysis (Li&Ma)
     bgo_significance_analysis = ExternalPythonOperator(
-        task_id="Significance_Analysis",
-        python=EXTERNAL_PYTHON_COSIPY,
-        python_callable=_run_significance_analysis,
-        op_kwargs={
-            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
-            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_BGO', key='return_value') }}",
-            "background_result": "{{ ti.xcom_pull(task_ids='Background_extraction_and_data_preparation', key='return_value') }}",
-            "duration_result": "{{ ti.xcom_pull(task_ids='Duration_on_different_binning', key='return_value') }}",
-        },
-        dag=dag,
-    )
-    
+    task_id="Significance_Analysis",
+    python=EXTERNAL_PYTHON_COSIPY,
+    python_callable=_run_significance_analysis,
+    op_kwargs={
+        "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
+        "extract_result": "{{ ti.xcom_pull(task_ids='Extract_Source_Data_From_FITS', key='return_value') }}",
+    },
+    dag=dag,
+)
     # Localization block. Chi2 and DL are placeholders; bc_tools is the active
     # branch and runs in nimcosipy because it needs cosipy.nonimaging.
-    
-    # Node 6. Localization_Chi2
+    # Node 3. Localization_Chi2
     bgo_localization_chi2 = EmptyOperator(task_id="Localization_Chi2", dag=dag)
-    
-    # Node 7. Localization_bc_tools
+    # Node 4. Localization_bc_tools
     bgo_localization_bc_tools = ExternalPythonOperator(
-        task_id="Localization_bc_tools",
-        python=EXTERNAL_PYTHON_NIMCOSIPY,
-        python_callable=_run_localization_bctools,
-        op_kwargs={
-            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
-            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_BGO', key='return_value') }}",
-            "background_result": "{{ ti.xcom_pull(task_ids='Background_extraction_and_data_preparation', key='return_value') }}",
-            "duration_result": "{{ ti.xcom_pull(task_ids='Duration_on_different_binning', key='return_value') }}",
-        },
-        do_xcom_push=True,
-        dag=dag,
+    task_id="Localization_bc_tools",
+    python=EXTERNAL_PYTHON_NIMCOSIPY,
+    python_callable=_run_localization_bctools,
+    op_kwargs={
+        "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
+        "extract_result": "{{ ti.xcom_pull(task_ids='Extract_Source_Data_From_FITS', key='return_value') }}",
+        "soft_lut_path": SOFT_LUT,
+        "medium_lut_path": MEDIUM_LUT,
+        "hard_lut_path": HARD_LUT,
+        "orientation_file": ORIENTATION_FILE,
+    },
+    do_xcom_push=True,
+    dag=dag,
     )
-    
-    # Node 8. Localization_DL
+    # Node 5. Localization_DL
     bgo_localization_dl = EmptyOperator(task_id="Localization_DL", dag=dag)
 
-    # Node 9. Localization_Results
+    # Node 6. Localization_Results
     bgo_localization_results = EmptyOperator(task_id="Localization_Results", dag=dag)
-    
-    # Node 10. Classification_BGO
+    # Node 7. Classification_BGO
     bgo_classification = EmptyOperator(task_id="Classification_BGO", dag=dag)
-    
-    # Node 11. GCN_BGO
+    # Node 8. GCN_BGO
     bgo_gcn = PythonOperator(
         task_id="GCN_BGO",
         python_callable=_queue_gcn_outbox_notice,
@@ -631,90 +430,76 @@ def build_custom(dag):
             "dag_run_id": "{{ run_id }}",
             "task_id": "GCN_BGO",
             "trigger_time": "{{ ts }}",
-            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_BGO', key='return_value') }}",
-            "duration_result": "{{ ti.xcom_pull(task_ids='Duration_on_different_binning', key='return_value') }}",
+            "config_path": "{{ ti.xcom_pull(task_ids='Extract_Source_Data_From_FITS', key='return_value')['config_path'] }}",
+            "duration_result": "{{ ti.xcom_pull(task_ids='Extract_Source_Data_From_FITS', key='return_value') }}",
             "significance_result": "{{ ti.xcom_pull(task_ids='Significance_Analysis', key='return_value') }}",
             "localization_result": "{{ ti.xcom_pull(task_ids='Localization_bc_tools', key='return_value') }}",
-            "topic": cfg("GCN_BGO_OUTBOUND_TOPIC", cfg("GCN_OUTBOUND_TOPIC_DEFAULT", "gcn.notices.cosi.bgo.test.alert")),
+            "topic": cfg(
+                "GCN_BGO_OUTBOUND_TOPIC",
+                cfg(
+                    "GCN_OUTBOUND_TOPIC_DEFAULT",
+                    "gcn.notices.cosi.bgo.test.alert",
+                ),
+            ),
         },
         dag=dag,
     )
 
-    # ==============================================
-    # 4. Diagram wiring
-    # ==============================================
-    # XCom carries small result dictionaries; large products and
+    # Diagram wiring. XCom carries small result dictionaries; large products and
     # shared metadata stay on disk in pipeline_config.yaml.
-    bgo_pre_processing >> bgo_duration_on_bins
-    bgo_duration_on_bins >> [
-        bgo_background_extraction_and_prep,
-        bgo_light_curve_generation,
+    bgo_extract_source_data >> [
+    bgo_localization_chi2,
+    bgo_localization_bc_tools,
+    bgo_localization_dl,
+    bgo_significance_analysis,
     ]
-    bgo_background_extraction_and_prep >> [
+    for node in [
         bgo_localization_chi2,
         bgo_localization_bc_tools,
         bgo_localization_dl,
         bgo_significance_analysis,
-    ]
-    for node in [bgo_localization_chi2, bgo_localization_bc_tools, bgo_localization_dl, bgo_significance_analysis]: 
+        ]:
         node >> bgo_localization_results
-    bgo_localization_results >> [bgo_classification, bgo_gcn]
+    bgo_localization_results >> [
+    bgo_classification,
+    bgo_gcn,
+    ]
+
     bgo_classification >> bgo_gcn
 
     
 
-# ==============================================
-# 5. DAG definition
-# ==============================================
+
 with COSIDAG(
-    # DAG identifier - associated with the Airflow Variables COSIDAG_PROCESSED::{dag_id}
     dag_id="cosidag_BGO",
-    # DAG scheduling
     start_date=datetime(2025, 1, 1),
-    # DAG scheduling interval (None = manual trigger only)
     schedule_interval=None,
     catchup=False,
-    # DAG description
     description="BGO branch of the fast transient pipeline",
-    # Levels of subdirectories to monitor for new data products. Only the basename of the monitored directories is used in the DAG
     level=3,
     only_basename="products",
-    # Number of seconds to wait for new files before considering the monitored directory idle. If idle, the DAG will trigger a run
     idle_seconds=5,
-    # Minimum number of files to trigger a run. If the number of files is less than this, the DAG will not trigger a run
     min_files=1,
-    # Maximum number of files to trigger a run. If the number of files is more than this, the DAG will not trigger a new run
     max_active_runs=2,
-    # Maximum number of tasks to run concurrently. If the number of tasks is more than this, the DAG will not trigger new tasks until some tasks finish
     max_active_tasks=32,
-    # Maximum number of concurrent DAG runs. If the number of DAG runs is more than this, the DAG will not trigger new runs until some runs finish
     concurrency=32,
-    # Query string to filter data folders by date.
     date_queries=f"<={datetime.now().strftime('%Y%m%d')}",
-    # Policy to select the most recent folder in a monitored directory. Options: "latest_mtime" (default), "latest_ctime", "latest_atime", "latest_name"
     select_policy="latest_mtime",
     file_patterns={
         # Fast transient inputs. The orientation pattern excludes science files
-        # containing GRB/BG and accepts both current FITS and legacy ORI files.
-        "lightcurve_file": "*.npz",
-        # Lookup tables for BGO localization
-        "soft_lut_file": "soft_lut_*.pkl",
-        "medium_lut_file": "medium_lut_*.pkl",
-        "hard_lut_file": "hard_lut_*.pkl",
-        # Orientation file must end with .fits or .ori and must not contain "GRB" or "BG".
-        "orientation_file": "regex:^(?!.*(?:GRB|BG)).*\\.(?:fits|ori)$",
+        # containing GRB/BG and accepts legacy ORI files.
+        "grb_fits_file": "*.fits",
+        "soft_lut_file": "soft_*.pkl",
+        "medium_lut_file": "medium_*.pkl",
+        "hard_lut_file": "hard_*.pkl",
+        "orientation_file": "DC4*.ori",
     },
-    # Automatically retrigger the DAG if new files are detected in the monitored directories. If False, the DAG will only trigger once 
     auto_retrig=True,
-    # Render templates as native Python objects instead of strings. This allows for more complex data structures to be passed between tasks.
     render_template_as_native_obj=True,
-    # Custom DAG build function
     build_custom=build_custom,
-    # Monitoring folders to watch for new data products
     monitoring_folders=[
         "/home/gamma/workspace/data/tdrss",
     ],
-    # DAG tags for categorization in the Airflow UI
     tags=["cosidag", "fast", "pipe", "phase1", "bgo"],
 ) as dag:
     pass

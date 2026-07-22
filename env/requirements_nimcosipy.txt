@@ -9,10 +9,13 @@
 setuptools==80.9.0
 
 # Conservative scientific stack shared with the COSIpy/BCT environments.
-numpy>=1.24,<2
-scipy>=1.10,<=1.15.3
+# SciPy is pinned because the current gdt/bc-tools dependency chain is not
+# compatible with newer SciPy releases (e.g. scipy.integrate.trapz removal).
+#numpy and pandas for the same reason are pinned in order to be compatible with SciPy
+numpy==1.26.4
+scipy==1.13.1
+pandas==2.1.4
 matplotlib>=3.7.1,<3.9
-pandas>=2.0,<2.2
 h5py>=3
 pyyaml
 
