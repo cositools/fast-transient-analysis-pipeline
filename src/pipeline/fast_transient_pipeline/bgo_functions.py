@@ -77,6 +77,41 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _plot_identity(
+    instrument: str,
+    caption: str,
+    trigger_time: Any = None,
+    plot_name: str | None = None,
+    preview_title: str | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Return a uniform on-figure title and searchable PNG text metadata."""
+    from datetime import datetime, timezone
+
+    generated_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    trigger_label = (
+        str(trigger_time)
+        if trigger_time not in (None, "")
+        else "* (TODO: provide trigger time)"
+    )
+    title = (
+        f"COSI {instrument} - Trigger Time: {trigger_label} - "
+        f"Generated: {generated_utc}"
+    )
+    if plot_name:
+        title = f"{title}\n{plot_name}"
+
+    metadata = {
+        "Title": title.replace("\n", " — "),
+        "Description": caption,
+        "Caption": caption,
+        "Instrument": f"COSI {instrument}",
+        "PreviewTitle": preview_title or plot_name or f"COSI {instrument} Plot",
+        "TriggerTime": trigger_label,
+        "GeneratedUTC": generated_utc,
+    }
+    return title, metadata
+
+
 def _ensure_structured_pipeline_config(config: dict[str, Any]) -> dict[str, Any]:
     # Keep BGO aligned with the GeD YAML schema: one top-level run section
     # contains resolved inputs and per-task bookkeeping.
@@ -561,7 +596,8 @@ def light_curve_generation(
     panel: str | None = None,
     buffer: float = 0.0,
     order: int = 2,
-    show: bool = False
+    show: bool = False,
+    trigger_time: Any = None,
 ):
     """
     Generate and save light-curve plots from Bayesian-Blocks step output.
@@ -618,17 +654,53 @@ def light_curve_generation(
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     # Plot 1: raw counts light curve
+    counts_caption = (
+        f"COSI BGO light curve for shield panel {panel}. The blue step histogram "
+        "shows the measured counts in each time bin; bin centers are plotted on "
+        "the horizontal axis and counts per bin on the vertical axis."
+    )
+    counts_title, counts_metadata = _plot_identity(
+        "BGO",
+        counts_caption,
+        trigger_time,
+        f"Panel {panel} counts light curve",
+        preview_title="BGO Light Curve",
+    )
     fig1, ax1 = plt.subplots(figsize=(10, 4))
-    ax1.step(lc_sel.centroids, lc_sel.counts, where="mid")
+    ax1.step(
+        lc_sel.centroids,
+        lc_sel.counts,
+        where="mid",
+        color="tab:blue",
+        label="Measured counts",
+    )
     ax1.set_xlabel("Time [s]")
     ax1.set_ylabel("Counts / bin")
-    ax1.set_title(f"Light curve ({panel})")
+    ax1.set_title(counts_title)
+    ax1.legend()
     ax1.grid(True, alpha=0.3)
     fig1.tight_layout()
     light_curve_path = plots_dir / f"light_curve_{panel}.png"
-    fig1.savefig(light_curve_path, dpi=150)
+    fig1.savefig(light_curve_path, dpi=150, metadata=counts_metadata)
 
     # Plot 2: raw rate + fitted background + Bayesian blocks + signal boundaries
+    analysis_caption = (
+        f"COSI BGO duration analysis for shield panel {panel}. Grey measurements "
+        "with error bars show the observed count rate, the red dotted curve is "
+        "the fitted polynomial background, and the blue step curve is the "
+        "Bayesian-blocks model. Olive dashed lines mark the inferred signal "
+        "interval used to estimate T90."
+    )
+    analysis_title, analysis_metadata = _plot_identity(
+        "BGO",
+        analysis_caption,
+        trigger_time,
+        (
+            f"Panel {panel} Bayesian-blocks analysis - "
+            f"T90={t90:.3f} (+{t90_err_high:.3f}/-{t90_err_low:.3f}) s"
+        ),
+        preview_title="BGO Light Curve",
+    )
     fig2, ax2 = plt.subplots(figsize=(10, 4))
     ax2.plot(
         lc_sel.centroids,
@@ -650,20 +722,19 @@ def light_curve_generation(
         np.append(bb_lc_timebins["lo_edges"], bb_lc_timebins["hi_edges"][-1]),
         np.append(bb_lc_timebins["rates"], bb_lc_timebins["rates"][-1]),
         drawstyle="steps-post",
+        color="tab:blue",
         label="Bayesian blocks",
     )
     ax2.axvline(tstart, ls="--", color="olive", label="Signal start/stop")
     ax2.axvline(tstop, ls="--", color="olive")
     ax2.set_xlabel("Time [s]")
     ax2.set_ylabel("Rate [counts/s]")
-    ax2.set_title(
-        f"Background fit ({panel}) - T90={t90:.3f} (+{t90_err_high:.3f}/-{t90_err_low:.3f}) s"
-    )
+    ax2.set_title(analysis_title)
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     fig2.tight_layout()
     background_fit_path = plots_dir / f"light_curve_background_t90_bblocks_{panel}.png"
-    fig2.savefig(background_fit_path, dpi=150)
+    fig2.savefig(background_fit_path, dpi=150, metadata=analysis_metadata)
 
     if show:
         plt.show()
@@ -776,6 +847,7 @@ def localize_bctools(
     s_counts_arr: np.ndarray,
     b_counts_arr: np.ndarray,
     tstart: float,
+    trigger_time: Any = None,
 ) -> tuple[str, dict]:
     """
     Run BGO localization with BC tools.
@@ -872,11 +944,32 @@ def localize_bctools(
         s=2,
         label="Best localization"
         )
+    localization_caption = (
+        "COSI BGO all-sky localization test-statistic map in Galactic "
+        "coordinates. Pixel colors encode the localization test statistic, the "
+        "contour encloses the 90% confidence region, and the red marker identifies "
+        "the best-fit transient position."
+    )
+    localization_title, localization_metadata = _plot_identity(
+        "BGO",
+        localization_caption,
+        trigger_time,
+        "BGO panel-pattern localization skymap",
+        preview_title="BGO TS Map",
+    )
+    ax.set_xlabel("Galactic longitude l [deg]")
+    ax.set_ylabel("Galactic latitude b [deg]")
+    ax.set_title(localization_title)
     # Add legend 
     ax.legend(loc="upper right", frameon=True)
     # Save the plot
     plot_path = plots_dir / "bgo_localization.png"
     fig = ax.figure
-    fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+    fig.savefig(
+        plot_path,
+        dpi=150,
+        bbox_inches="tight",
+        metadata=localization_metadata,
+    )
     plt.close(fig)
     return str(plots_dir)

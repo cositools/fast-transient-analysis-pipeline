@@ -279,6 +279,12 @@ def build_custom(dag):
             analysis_dir=analysis_dir,
             panel=light_curve_config.get("panel"),
             show=bool(light_curve_config.get("show", False)),
+            trigger_time=(
+                config.get("trigger_time")
+                or config.get(str(config.get("pipeline_name", "BGO")), {}).get(
+                    "trigger_time"
+                )
+            ),
         )
 
         result = {
@@ -377,6 +383,12 @@ def build_custom(dag):
             s_counts_arr=np.asarray(background_result["signal_counts"]),
             b_counts_arr=np.asarray(background_result["background_counts"]),
             tstart=float(duration_result["tstart"]),
+            trigger_time=(
+                config.get("trigger_time")
+                or config.get(str(config.get("pipeline_name", "BGO")), {}).get(
+                    "trigger_time"
+                )
+            ),
         )
 
         result = {

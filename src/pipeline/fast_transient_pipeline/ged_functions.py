@@ -166,6 +166,54 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _plot_identity(
+    instrument: str,
+    caption: str,
+    trigger_time: Any = None,
+    plot_name: str | None = None,
+    preview_title: str | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Return a uniform on-figure title and searchable PNG text metadata."""
+    from datetime import datetime, timezone
+
+    generated_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    trigger_label = (
+        str(trigger_time)
+        if trigger_time not in (None, "")
+        else "* (TODO: provide trigger time)"
+    )
+    title = (
+        f"COSI {instrument} - Trigger Time: {trigger_label} - "
+        f"Generated: {generated_utc}"
+    )
+    if plot_name:
+        title = f"{title}\n{plot_name}"
+
+    metadata = {
+        "Title": title.replace("\n", " — "),
+        "Description": caption,
+        "Caption": caption,
+        "Instrument": f"COSI {instrument}",
+        "PreviewTitle": preview_title or plot_name or f"COSI {instrument} Plot",
+        "TriggerTime": trigger_label,
+        "GeneratedUTC": generated_utc,
+    }
+    return title, metadata
+
+
+def _config_trigger_time(config: dict[str, Any], instrument: str) -> Any:
+    """Resolve trigger time from either the flat or structured run config."""
+    trigger_time = config.get("trigger_time")
+    if trigger_time not in (None, ""):
+        return trigger_time
+
+    pipeline_name = str(config.get("pipeline_name", instrument))
+    run_config = config.get(pipeline_name, {})
+    if isinstance(run_config, dict):
+        return run_config.get("trigger_time")
+    return None
+
+
 def _ensure_structured_pipeline_config(config: dict[str, Any]) -> dict[str, Any]:
     # Airflow/DAG consumers expect a top-level run section named after the
     # pipeline. This helper creates that section and records resolved inputs.
@@ -692,16 +740,36 @@ def unbinned_light_curve_generation(config_path: str) -> str:
         comments="",
     )
 
+    trigger_time = _config_trigger_time(config, "GeD")
+    lc_caption = (
+        "COSI GeD ARM-gated light curve. The black step histogram shows the "
+        f"number of events per {bin_size:.3f} s bin after selecting events with "
+        f"ARM between {arm_min:.1f} and {arm_max:.1f} deg around the Galactic "
+        f"position (l, b)=({l_deg:.3f}, {b_deg:.3f}) deg."
+    )
+    lc_title, lc_metadata = _plot_identity(
+        "GeD",
+        lc_caption,
+        trigger_time,
+        "ARM-gated light curve",
+        preview_title="GeD Light Curve",
+    )
     out_lc = os.path.join(plots_dir, f"{out_prefix}_lc.{fmt}")
-    plt.figure(figsize=tuple(ulc_cfg.get("plot_figsize", [8, 4])))
-    plt.step(centers, counts_gated, where="mid", color="k")
-    plt.xlabel("Time [s]")
-    plt.ylabel(f"Counts / {bin_size:.3f} s")
-    plt.title(f"ARM-gated LC [{arm_min:.1f},{arm_max:.1f}] deg | l={l_deg:.3f}, b={b_deg:.3f}")
-    plt.grid(True, ls="--", alpha=0.5)
+    fig_lc, ax_lc = plt.subplots(figsize=tuple(ulc_cfg.get("plot_figsize", [8, 4])))
+    ax_lc.step(centers, counts_gated, where="mid", color="black")
+    ax_lc.set_xlabel("Time [s]")
+    ax_lc.set_ylabel(f"Counts / {bin_size:.3f} s")
+    ax_lc.set_title(lc_title)
+    ax_lc.grid(True, ls="--", alpha=0.5)
     plot_dpi = int(ulc_cfg.get("plot_dpi", 200))
-    plt.savefig(out_lc, dpi=plot_dpi, bbox_inches="tight")
-    plt.close()
+    save_metadata = lc_metadata if fmt.lower() == "png" else None
+    fig_lc.savefig(
+        out_lc,
+        dpi=plot_dpi,
+        bbox_inches="tight",
+        metadata=save_metadata,
+    )
+    plt.close(fig_lc)
 
     out_diag = None
     if diagnostics:
@@ -747,8 +815,28 @@ def unbinned_light_curve_generation(config_path: str) -> str:
             f"  ARM-gated: {n_gated}  (fraction {frac_gated:.3f})\n"
         )
         ax[1, 1].text(0.02, 0.98, text, va="top", ha="left", fontsize=10, family="monospace")
-        fig.suptitle(f"GRB time-series diagnostics - {out_prefix}", fontsize=14)
-        fig.savefig(out_diag, dpi=plot_dpi, bbox_inches="tight")
+        diagnostics_caption = (
+            "COSI GeD event-selection diagnostics. The upper-left black step "
+            "histogram is the light curve for all events in the selected time "
+            "window; the upper-right blue histogram contains only ARM-gated "
+            "events. The lower-left orange histogram is the ARM distribution, "
+            "with red dashed lines marking the accepted interval. The lower-right "
+            "panel reports the selection parameters and event totals."
+        )
+        diagnostics_title, diagnostics_metadata = _plot_identity(
+            "GeD",
+            diagnostics_caption,
+            trigger_time,
+            f"Event-selection diagnostics ({out_prefix})",
+            preview_title="GeD Light Curve",
+        )
+        fig.suptitle(diagnostics_title, fontsize=14)
+        fig.savefig(
+            out_diag,
+            dpi=plot_dpi,
+            bbox_inches="tight",
+            metadata=diagnostics_metadata if fmt.lower() == "png" else None,
+        )
         plt.close(fig)
 
     payload = {
@@ -1175,6 +1263,7 @@ def _fl_save_pretty_significance_map(
     best_s: float,
     true_l: float | None = None,
     true_b: float | None = None,
+    trigger_time: Any = None,
     figsize: list[float] | tuple[float, float] = (10, 6),
     dpi: int = 220) -> str:
     import healpy as hp
@@ -1186,12 +1275,30 @@ def _fl_save_pretty_significance_map(
     offset = None
     if true_l is not None and true_b is not None:
         offset = _fl_angsep_deg(true_l, true_b, best_l, best_b)
-    title = (
-        f"ARM-gated HEALPix Significance Map (NSIDE={nside}, mean spacing~{mean_spacing:.2f} deg)\n"
+    details = (
+        f"ARM-gated HEALPix significance map (NSIDE={nside}, mean spacing~{mean_spacing:.2f} deg)\n"
         f"ON=[{on_start:.3f},{on_stop:.3f}]  OFF=[{off_start:.3f},{off_stop:.3f}]  "
         f"alpha={alpha:.3f}  ARM=[{arm_min:.1f},{arm_max:.1f}] deg\n"
         f"Max pixel significance: {best_s:.2f} sigma"
         + (f" | Offset = {offset:.2f} deg" if offset is not None else "")
+    )
+    caption = (
+        "COSI GeD all-sky localization significance map in Galactic "
+        "coordinates using a Mollweide projection. Pixel colors follow the "
+        "inferno scale and encode Li & Ma significance in Gaussian sigma. "
+        "The cyan star marks the reconstructed transient position"
+        + (
+            ", while the magenta star marks the supplied reference position."
+            if true_l is not None and true_b is not None
+            else "."
+        )
+    )
+    title, metadata = _plot_identity(
+        "GeD",
+        caption,
+        trigger_time,
+        details,
+        preview_title="GeD TS Map",
     )
     plt.figure(figsize=tuple(figsize), dpi=int(dpi))
     hp.mollview(sig_map, title=title, unit="sigma", cmap="inferno")
@@ -1244,6 +1351,8 @@ def _fl_save_pretty_significance_map(
     else:
         info = f"Reco: (l,b)=({best_lw:.2f} deg, {best_b:.2f} deg)\n" f"S_max = {best_s:.2f} sigma"
     ax = plt.gca()
+    ax.set_xlabel("Galactic longitude l [deg]")
+    ax.set_ylabel("Galactic latitude b [deg]")
     ax.legend(handles=legend_handles, loc="lower left", bbox_to_anchor=(0.02, -0.05), framealpha=0.92)
     ax.text(
         0.02,
@@ -1256,7 +1365,7 @@ def _fl_save_pretty_significance_map(
         va="top",
         bbox=dict(facecolor="black", alpha=0.60, boxstyle="round,pad=0.35"),
     )
-    plt.savefig(out_path, bbox_inches="tight")
+    plt.savefig(out_path, bbox_inches="tight", metadata=metadata)
     plt.close()
     return out_path
 
@@ -1264,6 +1373,7 @@ def _fl_save_pretty_significance_map(
 def _fl_save_nside_table_png(
     out_path: str,
     rows: list[list[float]],
+    trigger_time: Any = None,
     figsize_width: float = 14,
     figsize_base_height: float = 2.4,
     figsize_row_height: float = 0.38,
@@ -1316,9 +1426,22 @@ def _fl_save_nside_table_png(
         if row == 0:
             cell.set_text_props(weight="bold")
             cell.set_facecolor("#f0f0f0")
-    ax.set_title("HEALPix Pixel Information (Run Summary)", fontsize=14, weight="bold", pad=14)
+    caption = (
+        "COSI GeD tabular summary of the HEALPix localization runs. Each row "
+        "reports one map resolution and lists its NSIDE, pixel count, angular "
+        "spacing, solid angle, best-fit Galactic coordinates, peak significance, "
+        "reference offset when available, and map computation time."
+    )
+    title, metadata = _plot_identity(
+        "GeD",
+        caption,
+        trigger_time,
+        "HEALPix localization run summary",
+        preview_title="GeD TS Map",
+    )
+    ax.set_title(title, fontsize=14, weight="bold", pad=14)
     plt.tight_layout()
-    fig.savefig(out_path, bbox_inches="tight")
+    fig.savefig(out_path, bbox_inches="tight", metadata=metadata)
     plt.close(fig)
     return out_path
 
@@ -1868,6 +1991,7 @@ def duration_and_localization_results(config_path: str) -> str:
         best_s,
         true_l=true_lf,
         true_b=true_bf,
+        trigger_time=_config_trigger_time(config, "GeD"),
         figsize=fl.get("map_plot_figsize", [10, 6]),
         dpi=int(fl.get("map_plot_dpi", 220)),
     )
@@ -1891,6 +2015,7 @@ def duration_and_localization_results(config_path: str) -> str:
         _fl_save_nside_table_png(
             out_tbl,
             summary_rows,
+            trigger_time=_config_trigger_time(config, "GeD"),
             figsize_width=float(fl.get("nside_table_figsize_width", 14)),
             figsize_base_height=float(fl.get("nside_table_figsize_base_height", 2.4)),
             figsize_row_height=float(fl.get("nside_table_figsize_row_height", 0.38)),
@@ -2025,11 +2150,12 @@ def compute_ts_map(
     logging.basicConfig(level = logging.INFO)
     import gc
     import astropy.units as u
-    from astropy.coordinates import SkyCoord
     from astropy.time import Time
     from cosipy import FastTSMap, MOCTSMap, SpacecraftHistory
     from histpy import Histogram
     from mhealpy import HealpixMap
+    import healpy as hp
+    import matplotlib.pyplot as plt
     from threeML import Powerlaw
 
     # Define the assumed source spectrum used by FastTSMap and MOCTSMap.
@@ -2100,11 +2226,52 @@ def compute_ts_map(
     fast_coo = fast_map.pix2skycoord(fast_idx)
     fast_l = float(fast_coo.l.value)
     fast_b = float(fast_coo.b.value)
-    fast_coord = SkyCoord(l=fast_l, b=fast_b, unit=(u.deg, u.deg), frame="galactic")
     fast_plot_path = plots_dir / fast_plot_name
-    fast.plot_ts(fast_ts, skycoord=fast_coord, 
-                save_plot = True, save_dir = str(plots_dir),
-                save_name = fast_plot_name, dpi = plot_dpi)
+    trigger_time = _config_trigger_time(config, "GeD")
+    fast_caption = (
+        "COSI GeD fixed-resolution HEALPix test-statistic skymap in Galactic "
+        "coordinates using a Mollweide projection. Pixel colors encode the test "
+        "statistic (TS); larger values indicate positions more consistent with a "
+        "transient source. The fuchsia cross marks the maximum-TS position."
+    )
+    fast_title, fast_metadata = _plot_identity(
+        "GeD",
+        fast_caption,
+        trigger_time,
+        f"Fixed-resolution TS skymap (NSIDE={nside})",
+        preview_title="GeD TS Map",
+    )
+    fig_fast = plt.figure(figsize=(10, 6), dpi=plot_dpi)
+    hp.mollview(
+        fast_ts,
+        nest=map_scheme.startswith("nest"),
+        coord="G",
+        title=fast_title,
+        unit="TS",
+        fig=fig_fast.number,
+    )
+    hp.graticule(color="grey", alpha=0.45)
+    hp.projscatter(
+        fast_l,
+        fast_b,
+        marker="x",
+        linewidths=1.2,
+        lonlat=True,
+        coord="G",
+        color="fuchsia",
+        label="Maximum TS",
+    )
+    fast_ax = plt.gca()
+    fast_ax.set_xlabel("Galactic longitude l [deg]")
+    fast_ax.set_ylabel("Galactic latitude b [deg]")
+    fast_ax.legend(loc="lower left", framealpha=0.9)
+    fig_fast.savefig(
+        fast_plot_path,
+        dpi=plot_dpi,
+        bbox_inches="tight",
+        metadata=fast_metadata,
+    )
+    plt.close(fig_fast)
 
     # MOCTSMap uses a multi-order map and reports the best UNIQ cell.
     moc = MOCTSMap(
@@ -2130,11 +2297,45 @@ def compute_ts_map(
     moc_coo = moc_map.pix2skycoord(moc_pix)
     moc_l = float(moc_coo.l.value)
     moc_b = float(moc_coo.b.value)
-    moc_coord = SkyCoord(l=moc_l, b=moc_b, unit=(u.deg, u.deg), frame="galactic")
     moc_plot_path = plots_dir / moc_plot_name
-    MOCTSMap.plot_ts(moc_ts, moc_uniq, skycoord=moc_coord, 
-                save_plot = True, save_dir = str(plots_dir),
-                save_name = moc_plot_name, dpi = plot_dpi)
+    moc_caption = (
+        "COSI GeD Multi-Resolution coverage test-statistic skymap in Galactic "
+        "coordinates using a Mollweide projection. Pixel colors encode the test "
+        "statistic (TS), while grey boundaries show the adaptive HEALPix cells. "
+        "The red cross marks the maximum-TS cell."
+    )
+    moc_title, moc_metadata = _plot_identity(
+        "GeD",
+        moc_caption,
+        trigger_time,
+        f"Multi-resolution TS skymap (maximum cell NSIDE={moc_nside})",
+        preview_title="GeD TS Map",
+    )
+    moc_plot_map = HealpixMap(data=moc_ts, uniq=moc_uniq)
+    fig_moc = plt.figure(figsize=(10, 6), dpi=plot_dpi)
+    moc_ax = fig_moc.add_subplot(1, 1, 1, projection="mollview")
+    moc_plot_map.plot(ax=moc_ax)
+    moc_plot_map.plot_grid(ax=moc_ax, color="grey", linewidth=0.1)
+    moc_ax.text(
+        moc_l,
+        moc_b,
+        "x",
+        size=8,
+        horizontalalignment="center",
+        verticalalignment="center",
+        transform=moc_ax.get_transform("world"),
+        color="red",
+    )
+    moc_ax.set_title(moc_title)
+    moc_ax.set_xlabel("Galactic longitude l [deg]")
+    moc_ax.set_ylabel("Galactic latitude b [deg]")
+    fig_moc.savefig(
+        moc_plot_path,
+        dpi=plot_dpi,
+        bbox_inches="tight",
+        metadata=moc_metadata,
+    )
+    plt.close(fig_moc)
 
     tsmap_payload = {
         "fast": {
@@ -2351,17 +2552,49 @@ def light_curve(
     # Build bin edges aligned with the configured pre/post burst windows.
     bins = np.arange(tstart - eps_preburst, tstop + eps_postburst + bin_size, bin_size)
 
-    plt.figure(figsize=tuple(lightcurve_cfg.get("plot_figsize", [10, 4])))
-    plt.step(time_centers, counts, where="mid")
-    plt.xlabel("Time (s)")
-    plt.ylabel("Counts")
-    plt.title(f"GRB light curve (bin = {bin_size}s)")
-    plt.axvline(x=config["tstart"], linestyle="--", linewidth=1.5)
+    lightcurve_caption = (
+        "COSI GeD light curve extracted around the selected TS-map position. "
+        f"The blue step histogram gives the counts in {bin_size:g} s bins after "
+        f"applying the {float(lightcurve_cfg.get('containment', 0.5)):.0%} "
+        "point-source-response containment mask. The orange dashed line marks "
+        "the configured trigger-window start."
+    )
+    lightcurve_title, lightcurve_metadata = _plot_identity(
+        "GeD",
+        lightcurve_caption,
+        _config_trigger_time(config, "GeD"),
+        "Point-source-response selected light curve",
+        preview_title="GeD Light Curve",
+    )
+    fig_lc, ax_lc = plt.subplots(figsize=tuple(lightcurve_cfg.get("plot_figsize", [10, 4])))
+    ax_lc.step(
+        time_centers,
+        counts,
+        where="mid",
+        color="tab:blue",
+        label="Selected counts",
+    )
+    ax_lc.set_xlabel("Time [s]")
+    ax_lc.set_ylabel(f"Counts / {bin_size:g} s")
+    ax_lc.set_title(lightcurve_title)
+    ax_lc.axvline(
+        x=config["tstart"],
+        color="tab:orange",
+        linestyle="--",
+        linewidth=1.5,
+        label="Trigger-window start",
+    )
+    ax_lc.legend()
+    ax_lc.grid(True, alpha=0.3)
 
     lightcurve_plot_path = plots_dir / "lightcurve.png"
-    plt.tight_layout()
-    plt.savefig(lightcurve_plot_path, dpi=int(lightcurve_cfg.get("plot_dpi", 150)))
-    plt.close()
+    fig_lc.tight_layout()
+    fig_lc.savefig(
+        lightcurve_plot_path,
+        dpi=int(lightcurve_cfg.get("plot_dpi", 150)),
+        metadata=lightcurve_metadata,
+    )
+    plt.close(fig_lc)
 
     lightcurve_payload = {
         "plot_path": str(lightcurve_plot_path),
@@ -2499,9 +2732,10 @@ def duration(config_path: str) -> str:
             bb_lc,
             tstart,
             tstop,
-            save_path=str(plots_dir / "duration_plot.png"),
+            save_path=str(plots_dir / "lc_analysis.png"),
             figsize=duration_cfg.get("plot_figsize", [10, 4]),
             dpi=int(duration_cfg.get("plot_dpi", 150)),
+            trigger_time=_config_trigger_time(config, "GeD"),
         )
 
     duration_payload = {
@@ -2521,6 +2755,11 @@ def duration(config_path: str) -> str:
         "t90": float(t90),
         "t90_err_low": float(t90_err_low),
         "t90_err_high": float(t90_err_high),
+        "plot_path": (
+            str(plots_dir / "lc_analysis.png")
+            if bb_lc is not None and lc_sel is not None
+            else None
+        ),
     }
 
     config["duration"] = duration_payload
@@ -2734,7 +2973,9 @@ def plot_duration(
     tstop, 
     save_path = None,
     figsize: list[float] | tuple[float, float] = (10, 4),
-    dpi: int = 150) -> None:
+    dpi: int = 150,
+    trigger_time: Any = None,
+) -> None:
     """
     Plot the duration of the source and background data.
 
@@ -2751,31 +2992,69 @@ def plot_duration(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    plt.figure(figsize=tuple(figsize))
-    plt.plot(lc_sel.centroids, bb_lc.bkg_counts/lc_sel.exposure, color = 'red', ls = ':',
-                    label = "Fitted background")
-    plt.errorbar(lc_sel.centroids, lc_sel.rates, xerr = [lc_sel.centroids-lc_sel.lo_edges, 
-    lc_sel.hi_edges-lc_sel.centroids],
-                        yerr = lc_sel.rate_uncertainty, 
-                        ls = 'none', color = '.7',
-                        label = 'Raw data')
+    caption = (
+        "COSI GeD light-curve duration analysis. Grey points with error bars "
+        "show the measured count rate, the red dotted curve is the fitted "
+        "background, and the blue step curve is the Bayesian-blocks model. "
+        "Olive dashed vertical lines delimit the inferred signal interval used "
+        "for the duration estimate."
+    )
+    title, metadata = _plot_identity(
+        "GeD",
+        caption,
+        trigger_time,
+        "Bayesian-blocks light-curve analysis",
+        preview_title="GeD Light Curve",
+    )
+    fig, ax = plt.subplots(figsize=tuple(figsize))
+    ax.plot(
+        lc_sel.centroids,
+        bb_lc.bkg_counts / lc_sel.exposure,
+        color="red",
+        ls=":",
+        label="Fitted background",
+    )
+    ax.errorbar(
+        lc_sel.centroids,
+        lc_sel.rates,
+        xerr=[
+            lc_sel.centroids - lc_sel.lo_edges,
+            lc_sel.hi_edges - lc_sel.centroids,
+        ],
+        yerr=lc_sel.rate_uncertainty,
+        ls="none",
+        color=".7",
+        label="Raw data",
+    )
     # Signal light curve
     lc_bayes = bb_lc.bb_lightcurve
     # Bayesian blocks light curve
-    plt.plot(np.append(lc_bayes.lo_edges, lc_bayes.hi_edges[-1]),
-                    np.append(lc_bayes.rates, lc_bayes.rates[-1]),
-                    drawstyle = 'steps-post',
-                    label = 'Bayesian blocks')
+    ax.plot(
+        np.append(lc_bayes.lo_edges, lc_bayes.hi_edges[-1]),
+        np.append(lc_bayes.rates, lc_bayes.rates[-1]),
+        drawstyle="steps-post",
+        color="tab:blue",
+        label="Bayesian blocks",
+    )
     # Vertical lines showing the start and stop of the identified signal
-    plt.axvline(bb_lc.signal_range.tstart, ls = "--", color = 'olive', label = "Signal start/stop")
-    plt.axvline(bb_lc.signal_range.tstop, ls = "--", color = 'olive')
+    ax.axvline(
+        bb_lc.signal_range.tstart,
+        ls="--",
+        color="olive",
+        label="Signal start/stop",
+    )
+    ax.axvline(bb_lc.signal_range.tstop, ls="--", color="olive")
     # Add legend and grid
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Rate [counts/s]")
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
     # Save the plot
     if save_path:
-        plt.savefig(save_path, dpi=dpi)
-    plt.close()
+        fig.savefig(save_path, dpi=dpi, metadata=metadata)
+    plt.close(fig)
 
 #########################################################
 # TASK 9: Spectral_Analysis

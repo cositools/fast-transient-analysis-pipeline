@@ -689,7 +689,7 @@ If Bayesian Blocks fails, the task returns the configured sentinel value, by def
 ### Output
 
 ```text
-duration_plot.png
+lc_analysis.png
 duration_results.yaml
 ```
 
@@ -845,7 +845,7 @@ tsmap_moc.png
 tsmap_results.yaml
 lightcurve.png
 lightcurve_results.yaml
-duration_plot.png
+lc_analysis.png
 duration_results.yaml
 ```
 
