@@ -9,7 +9,6 @@ import time
 import sys
 from zipfile import BadZipFile
 from pathlib import Path
-from cosipy.util import fetch_wasabi_file
 
 DEFAULT_WASABI_BASE = "COSI-SMEX/DC3/Data"
 
@@ -85,6 +84,10 @@ def unzip_to_same_dir(zip_path: Path) -> Path:
     return ready if ready.exists() else zip_path
 
 def fetch_wasabi(remote_key: str, out_path: Path, wasabi_base: str = DEFAULT_WASABI_BASE) -> None:
+    # Keep the heavy COSIpy dependency out of module import so the generic
+    # staging helpers can be unit-tested without a scientific environment.
+    from cosipy.util import fetch_wasabi_file
+
     ensure_dir(out_path.parent)
     wasabi_key = normalize_wasabi_key(remote_key, wasabi_base)
     print(f"[stage] Starting download of {wasabi_key}...", flush=True, file=sys.stderr)
@@ -143,6 +146,8 @@ def download_or_use_one(
     # If the file is zipped, unzip it
     if target_file.suffix == ".gz":
         ready = gunzip_to_same_dir(target_file)
+        if kind == "background" and ready.suffix.lower() == ".fits" and not validate_background_fits(ready):
+            raise RuntimeError(f"[stage] Local background FITS seems corrupted: {ready}")
         return str(ready)
     # If the file is a zip, extract it
     if target_file.suffix == ".zip":
@@ -151,6 +156,59 @@ def download_or_use_one(
     if kind == "background" and target_file.suffix.lower() == ".fits" and not validate_background_fits(target_file):
         raise RuntimeError(f"[stage] Local background FITS seems corrupted: {target_file}")
     return str(target_file)
+
+
+def stage_inputs(inputs, dirs, *, wasabi_base=DEFAULT_WASABI_BASE, downloader=None):
+    """Stage exactly the supplied input mapping into category-specific dirs.
+
+    ``inputs`` and ``dirs`` must have identical keys. This makes the raw
+    directory assignment explicit and prevents accidentally processing inputs
+    from the non-selected pipeline branch.
+    """
+    if not isinstance(inputs, dict) or not inputs:
+        raise ValueError("[stage] --inputs must be a non-empty JSON object")
+    if not isinstance(dirs, dict):
+        raise ValueError("[stage] --dirs must be a JSON object")
+    if set(inputs) != set(dirs):
+        raise ValueError(
+            "[stage] input and raw-directory keys differ: "
+            f"inputs={sorted(inputs)}, dirs={sorted(dirs)}"
+        )
+
+    download = downloader or download_or_use_one
+    planned_targets = {}
+    resolved_dirs = {}
+    for kind, remote_or_local in inputs.items():
+        if not isinstance(kind, str) or not kind:
+            raise ValueError(f"[stage] invalid input category: {kind!r}")
+        if not isinstance(remote_or_local, str) or not remote_or_local.strip():
+            raise ValueError(f"[stage] invalid path for input {kind!r}")
+        if not isinstance(dirs[kind], str) or not dirs[kind].strip():
+            raise ValueError(f"[stage] invalid raw directory for input {kind!r}")
+        raw_dir = Path(dirs[kind]).expanduser()
+        if not raw_dir.is_absolute():
+            raise ValueError(
+                f"[stage] raw directory for input {kind!r} must be absolute: {raw_dir}"
+            )
+        resolved_dirs[kind] = raw_dir
+        target = raw_dir / Path(remote_or_local).name
+        target_key = str(target.resolve())
+        if target_key in planned_targets:
+            raise ValueError(
+                f"[stage] categories {planned_targets[target_key]!r} and {kind!r} "
+                f"would overwrite the same raw file: {target}"
+            )
+        planned_targets[target_key] = kind
+
+    return {
+        kind: download(
+            remote_or_local,
+            resolved_dirs[kind],
+            kind=kind,
+            wasabi_base=wasabi_base,
+        )
+        for kind, remote_or_local in inputs.items()
+    }
 
 
 def main():
@@ -164,20 +222,7 @@ def main():
     dirs = json.loads(args.dirs)
     wasabi_base = args.wasabi_base
 
-    staged = {
-        "response": download_or_use_one(
-            inputs["response"], Path(dirs["response"]), kind="response", wasabi_base=wasabi_base
-        ),
-        "orientation": download_or_use_one(
-            inputs["orientation"], Path(dirs["orientation"]), kind="orientation", wasabi_base=wasabi_base
-        ),
-        "source": download_or_use_one(
-            inputs["source"], Path(dirs["source"]), kind="source", wasabi_base=wasabi_base
-        ),
-        "background": download_or_use_one(
-            inputs["background"], Path(dirs["background"]), kind="background", wasabi_base=wasabi_base
-        ),
-    }
+    staged = stage_inputs(inputs, dirs, wasabi_base=wasabi_base)
     
     # Print JSON result to stdout for XCom
     print(json.dumps(staged))

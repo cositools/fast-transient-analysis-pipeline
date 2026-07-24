@@ -7,7 +7,7 @@ The DAGs are installed into Cosiflow with `cosiflow/env/hot_load_module.sh`.
 
 | DAG ID | File | Type | Runtime | Purpose |
 | --- | --- | --- | --- | --- |
-| `init_pipelines` | `cosipipe_simdata.py` | Standard DAG | `PythonOperator`, `DockerOperator` | Stage input files and create a run `products/` folder |
+| `init_pipelines` | `cosipipe_initpipeline.py` | Standard DAG | `PythonOperator`, `DockerOperator` | Stage GeD or BGO inputs and create a run `products/` folder |
 | `cosidag_lcurve_extpy` | `cosidag_lcurve_extpy.py` | COSIDAG | `ExternalPythonOperator` | Light curve products from staged GRB/background inputs |
 | `cosidag_lcurve_dock` | `cosidag_lcurve_dock.py` | COSIDAG | `DockerOperator` | Docker-based Light Curve variant |
 | `cosidag_tsmap_extpy` | `cosidag_tsmap_extpy.py` | COSIDAG | `ExternalPythonOperator` | TS map products from staged GRB/background inputs |
@@ -19,25 +19,55 @@ The DAGs are installed into Cosiflow with `cosiflow/env/hot_load_module.sh`.
 
 ## `init_pipelines`
 
-`init_pipelines` is the staging and initialization DAG.
+`init_pipelines` is the shared staging and initialization DAG for the GeD and
+BGO data families. Existing triggers that omit `pipeline_branch` continue to
+use GeD.
 
-It accepts Airflow trigger parameters:
+Airflow 2.10 renders the parameters in three visual sections:
 
-| Parameter | Purpose |
+| Section | Parameters | Purpose |
+| --- | --- | --- |
+| General | `pipeline_branch` | `GeD` (default) or `BGO` |
+| General | `destination` | GeD destination: `lcurve`, `tsmap`, `fast`, or `tdrss`; BGO always resolves to `tdrss` |
+| GeD inputs | `data_challenge` | Preset input set, `DC3` or `DC4` |
+| GeD inputs | `source_path`, `background_path`, `orientation_path`, `response_path` | GeD Wasabi keys; `__default__` uses the selected Data Challenge preset |
+| GeD inputs | `eps_time` | GeD background-cut time tolerance |
+| BGO inputs | `lightcurve_path` | BGO multi-panel light-curve NPZ |
+| BGO inputs | `soft_lut_path`, `medium_lut_path`, `hard_lut_path` | BGO localization lookup tables |
+| BGO inputs | `bgo_orientation_path` | BGO orientation (`.fits` or legacy `.ori`) |
+
+Every file parameter accepts `__default__`. The staging script also accepts a
+complete Wasabi key or a local path. Runtime resolution reads and validates
+only the inputs belonging to `pipeline_branch`; fields in the other visual
+section are not used.
+
+The BGO defaults are:
+
+| Input | Default Wasabi key |
 | --- | --- |
-| `data_challenge` | Preset input set, currently `DC3` or `DC4` |
-| `response_path` | Dropdown of response Wasabi keys; `__default__` uses the selected preset |
-| `orientation_path` | Dropdown of orientation Wasabi keys; `__default__` uses the selected preset |
-| `source_path` | Dropdown of source/GRB Wasabi keys; `__default__` uses the selected preset |
-| `background_path` | Dropdown of background Wasabi keys; `__default__` uses the selected preset |
-| `destination` | One of `lcurve`, `tsmap`, `fast`, `tdrss` |
-| `eps_time` | Background-cut time tolerance |
+| Light curve | `COSI-SMEX/develop/Data/Responses/BGO/bn240810880light_curve.npz` |
+| Soft LUT | `COSI-SMEX/develop/Data/Responses/BGO/soft_local_loc_table_run17.pkl` |
+| Medium LUT | `COSI-SMEX/develop/Data/Responses/BGO/medium_local_loc_table_run17.pkl` |
+| Hard LUT | `COSI-SMEX/develop/Data/Responses/BGO/hard_local_loc_table_run17.pkl` |
+| Orientation | `COSI-SMEX/DC4/Data/Orientation/DC4_final_530km_3_month_with_slew_1sbins_GalacticEarth_SAA.fits` |
 
-Its task chain is:
+The BGO orientation choices also include the DC3 legacy orientation
+`COSI-SMEX/DC3/Data/Orientation/DC3_final_530km_3_month_with_slew_1sbins_GalacticEarth_SAA.ori`.
+
+The shared prefix and branch-specific tails are:
 
 ```text
-prepare_raw_dirs -> resolve_config -> stage_all_files -> create_products_dir -> create_symlinks -> background_cut
+prepare_raw_dirs -> resolve_config -> stage_all_files -> create_products_dir -> create_symlinks
+  -> select_postprocessing -> background_cut        (GeD)
+                           `-> bgo_staging_complete (BGO)
+  -> initialization_complete
 ```
+
+GeD stages source, background, orientation, and response, then creates the
+background-window FITS product. BGO stages the light curve, three LUTs, and
+orientation, creates five symlinks in `products/`, and never runs the GeD
+background cut. The final join accepts one successful branch and the skipped
+other branch, so both paths finish successfully.
 
 The DAG writes products under:
 
@@ -122,6 +152,7 @@ To run the GeD branch from Airflow:
 
    | Parameter | Value |
    | --- | --- |
+   | `pipeline_branch` | `GeD` |
    | `data_challenge` | `DC4` |
    | `response_path` | `__default__` |
    | `orientation_path` | `__default__` |
@@ -145,6 +176,21 @@ The `products/` folder must contain the staged GRB/source file, the background
 window file created by `background_cut`, the orientation file, and the response
 file. These are matched by `cosidag_GeD` as `grb_file`, `background_file`,
 `orientation_file`, and `response_file`.
+
+## Testing the BGO Branch
+
+1. Unpause `cosidag_BGO`.
+2. Trigger `init_pipelines` with `pipeline_branch=BGO`; leave the five BGO
+   input parameters at `__default__` for the standard run17 data.
+3. The initializer creates a new
+   `/home/gamma/workspace/data/tdrss/YYYY_MM/YYMMDDXXX/products` folder with
+   the NPZ light curve, three LUTs, and orientation symlinks.
+4. `background_cut` is skipped, `initialization_complete` succeeds, and
+   `cosidag_BGO` discovers the new folder.
+
+The basenames are intentionally preserved so the files match
+`lightcurve_file`, `soft_lut_file`, `medium_lut_file`, `hard_lut_file`, and
+`orientation_file` in `cosidag_BGO.py`.
 
 ## Shared COSIDAG Behavior
 

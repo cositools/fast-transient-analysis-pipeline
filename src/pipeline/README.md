@@ -15,7 +15,7 @@ For the Light Curve and TS Map workflows, the usual flow is:
 1. Enable the target COSIDAG in the Airflow UI:
    * `cosidag_lcurve_extpy` or `cosidag_lcurve_dock`
    * `cosidag_tsmap_extpy` or `cosidag_tsmap_dock`
-2. Enable and trigger `init_pipelines`.
+2. Enable and trigger `init_pipelines` with `pipeline_branch=GeD` (the default).
 3. Set the `destination` parameter:
    * `lcurve` writes staged products under `/home/gamma/workspace/data/lcurve`
    * `tsmap` writes staged products under `/home/gamma/workspace/data/tsmap`
@@ -23,16 +23,25 @@ For the Light Curve and TS Map workflows, the usual flow is:
    * `tdrss` writes staged products under `/home/gamma/workspace/data/tdrss`
 4. The enabled COSIDAG discovers new `products/` folders through `monitoring_folders`.
 
-`init_pipelines` prepares and stages files, creates the run `products/` directory,
-creates symlinks, and runs the background cut. It does not directly trigger the
-scientific COSIDAG with a `TriggerDagRunOperator`.
+For the fast-transient BGO path, enable `cosidag_BGO` and trigger the same
+initializer with `pipeline_branch=BGO`. BGO stages its NPZ light curve, soft,
+medium, and hard LUTs, plus orientation under the `tdrss` destination. It does
+not run the GeD background cut.
+
+The Airflow form groups parameters into `General`, `GeD inputs`, and
+`BGO inputs`. `pipeline_branch` determines which input section is resolved and
+staged at runtime; the UI does not dynamically hide the other section.
+
+`init_pipelines` creates the run `products/` directory and symlinks for either
+branch. GeD additionally runs the background cut. It does not directly trigger
+the scientific COSIDAG with a `TriggerDagRunOperator`.
 
 ## Pipeline Areas
 
 | Directory or file | Used by | Purpose |
 | --- | --- | --- |
-| `stage_files.py` | `init_pipelines` | Stages source, background, orientation, and response files |
-| `bkg_cut.py` | `init_pipelines` | Creates the background time-window product |
+| `stage_files.py` | `init_pipelines` | Generically stages the selected GeD or BGO input mapping |
+| `bkg_cut.py` | GeD path of `init_pipelines` | Creates the GeD background time-window product |
 | `lcurve/` | `cosidag_lcurve_extpy`, `cosidag_lcurve_dock` | Light curve tasks |
 | `ts_map/` | `cosidag_tsmap_extpy`, `cosidag_tsmap_dock` | TS map tasks |
 | `fast_grb/` | `cosidag_fast_localize_grb`, `cosidag_fast_grb_timeseries` | Fast GRB localization and time-series tasks |

@@ -5,17 +5,41 @@
 # - run folder under DEST_MAP/YYYY_MM/YYMMDDXXX/products with symlinks and cut result
 
 from __future__ import annotations
-import json, os, re, shutil
+
+import json
+import os
+import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
+# Airflow loads this DAG through a ``*.cfmodule`` symlink whose directory is
+# not automatically importable as a Python package. Add the real DAG folder so
+# the adjacent pure configuration module can always be resolved.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from airflow import DAG
 from airflow.models.param import Param
-from airflow.operators.python import PythonOperator
+from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import BranchPythonOperator, PythonOperator
 from airflow.providers.docker.operators.docker import DockerOperator
+from airflow.utils.trigger_rule import TriggerRule
 from docker.types import Mount
 from datetime import timedelta
+
+from init_pipeline_config import (
+    AUTO_INPUT,
+    BGO_DEFAULTS,
+    BGO_ORIENTATION_KEYS,
+    DATA_CHALLENGE_DEFAULTS,
+    DEST_MAP,
+    PIPELINE_BRANCHES,
+    normalize_pipeline_branch,
+    postprocessing_task_for_branch,
+    raw_dirs_for_branch,
+    resolve_pipeline_config,
+)
 
 # === Config ===
 # The image to use for scientific tasks (cosipy environment)
@@ -38,24 +62,6 @@ CONTAINER_IMAGE = "fast-transient-analysis-pipeline:latest"
 
 STAGE_SCRIPT = "/home/gamma/workspace/fast-transient-analysis-pipeline/src/pipeline/stage_files.py"
 BKG_CUT_SCRIPT = "/home/gamma/workspace/fast-transient-analysis-pipeline/src/pipeline/bkg_cut.py"
-
-# === Paths ===
-RAW_ROOT = Path("/home/gamma/workspace/data/raw")
-RAW_SUBDIRS = {
-    "source": RAW_ROOT / "source",
-    "background": RAW_ROOT / "background",
-    "orientation": RAW_ROOT / "orientation",
-    "response": RAW_ROOT / "response",
-}
-
-DEST_MAP = {
-    "lcurve": Path("/home/gamma/workspace/data/lcurve"),
-    "tsmap": Path("/home/gamma/workspace/data/tsmap"),
-    "fast": Path("/home/gamma/workspace/data/fast_localize_grb"),
-    "tdrss": Path("/home/gamma/workspace/data/tdrss"),
-}
-
-AUTO_INPUT = "__default__"
 
 def wasabi_keys(base: str, folder: str, file_names: list[str]) -> list[str]:
     return [f"{base}/{folder}/{file_name}" for file_name in file_names]
@@ -320,26 +326,6 @@ def dropdown_choices(kind: str) -> list[str]:
                 result.append(value)
     return result
 
-# === Default Wasabi keys ===
-DATA_CHALLENGE_DEFAULTS = {
-    "DC3": {
-        "wasabi_base": "COSI-SMEX/DC3/Data",
-        "response": "COSI-SMEX/DC3/Data/Responses/ResponseContinuum.o3.e100_10000.b10log.s10396905069491.m2284.filtered.nonsparse.binnedimaging.imagingresponse_nside8.area.good_chunks.h5.zip",
-        "orientation": "COSI-SMEX/DC3/Data/Orientation/DC3_final_530km_3_month_with_slew_1sbins_GalacticEarth_SAA.ori",
-        "source": "COSI-SMEX/DC3/Data/Sources/GRB_bn081207680_3months_unbinned_data_filtered_with_SAAcut.fits.gz",
-        "background": "COSI-SMEX/DC3/Data/Backgrounds/Ge/Total_BG_with_SAAcomponent_3months_unbinned_data_filtered_with_SAAcut.fits.gz",
-    },
-    "DC4": {
-        "wasabi_base": "COSI-SMEX/DC4/Data",
-        "response": "COSI-SMEX/DC4/Data/Responses/ResponseContinuum.o3.e100_10000.b10log.s10396905069491.m2284.filtered.nonsparse.binnedimaging.imagingresponse.h5",
-        "orientation": "COSI-SMEX/DC4/Data/Orientation/DC4_final_530km_3_month_with_slew_1sbins_GalacticEarth_SAA.fits",
-        # The DC4 GRB tutorials use legacy GRB simulations from the DC3 source
-        # area together with DC4 response, orientation, and background products.
-        "source": "COSI-SMEX/DC3/Data/Sources/GRB_bn090424592_3months_unbinned_data_filtered_with_SAAcut.fits.gz",
-        "background": "COSI-SMEX/DC4/Data/Backgrounds/Total_DC4_BG_3months_unbinned_data_filtered_with_SAAcut_withSAAbck.fits.gz",
-    },
-}
-
 # === Helpers ===
 def ensure_dir(p: Path) -> Path:
     p.mkdir(parents=True, exist_ok=True)
@@ -363,9 +349,20 @@ def next_run_products_dir(base_dest: Path) -> Path:
 def make_symlinks(target_dir: Path, files_by_kind: Dict[str, str]) -> Dict[str, str]:
     """Create symlinks in target_dir for all paths in files_by_kind."""
     result = {}
+    links_by_name = {}
     for kind, paths in files_by_kind.items():
         link = target_dir / Path(paths).name
-        if not link.exists():
+        if link.name in links_by_name:
+            raise ValueError(
+                f"[init_pipelines] inputs {links_by_name[link.name]!r} and {kind!r} "
+                f"have the same basename {link.name!r}; refusing to overwrite a product"
+            )
+        links_by_name[link.name] = kind
+        if link.is_symlink() and link.resolve() != Path(paths).resolve():
+            raise FileExistsError(f"[init_pipelines] existing symlink has a different target: {link}")
+        if link.exists() and not link.is_symlink():
+            raise FileExistsError(f"[init_pipelines] product path already exists: {link}")
+        if not link.exists() and not link.is_symlink():
             link.symlink_to(paths)
             print(f"[symlink] {link} -> {paths}")
         result[kind] = str(link)
@@ -378,78 +375,117 @@ with DAG(
     schedule=None,
     catchup=False,
     tags=["cosiflow", "init", "docker"],
-    description="Initialize and stage COSI pipeline data (Docker Version)",
+    description="Initialize and stage GeD or BGO COSI pipeline data",
     params={
-        "data_challenge": Param(default="DC4", enum=list(DATA_CHALLENGE_DEFAULTS.keys())),
-        "response_path": Param(
-            default=AUTO_INPUT,
-            enum=dropdown_choices("response"),
+        "pipeline_branch": Param(
+            default="GeD",
+            enum=list(PIPELINE_BRANCHES),
             type="string",
-            description="Wasabi response key. Use __default__ for the selected Data Challenge preset.",
+            title="Pipeline branch",
+            description="Select the data family to resolve, stage, and initialize.",
+            section="General",
         ),
-        "orientation_path": Param(
-            default=AUTO_INPUT,
-            enum=dropdown_choices("orientation"),
+        "destination": Param(
+            default="tdrss",
+            enum=list(DEST_MAP.keys()),
             type="string",
-            description="Wasabi orientation key. Use __default__ for the selected Data Challenge preset.",
+            description="GeD output root. BGO always uses tdrss.",
+            section="General",
+        ),
+        "data_challenge": Param(
+            default="DC4",
+            enum=list(DATA_CHALLENGE_DEFAULTS.keys()),
+            type="string",
+            section="GeD inputs",
         ),
         "source_path": Param(
             default=AUTO_INPUT,
             enum=dropdown_choices("source"),
             type="string",
-            description="Wasabi source key. Use __default__ for the selected Data Challenge preset.",
+            description="Wasabi source/GRB key. Use __default__ for the selected Data Challenge preset.",
+            section="GeD inputs",
         ),
         "background_path": Param(
             default=AUTO_INPUT,
             enum=dropdown_choices("background"),
             type="string",
             description="Wasabi background key. Use __default__ for the selected Data Challenge preset.",
+            section="GeD inputs",
         ),
-        "destination": Param(default="tdrss", enum=list(DEST_MAP.keys())),  
+        "orientation_path": Param(
+            default=AUTO_INPUT,
+            enum=dropdown_choices("orientation"),
+            type="string",
+            description="Wasabi orientation key. Use __default__ for the selected Data Challenge preset.",
+            section="GeD inputs",
+        ),
+        "response_path": Param(
+            default=AUTO_INPUT,
+            enum=dropdown_choices("response"),
+            type="string",
+            description="Wasabi response key. Use __default__ for the selected Data Challenge preset.",
+            section="GeD inputs",
+        ),
         "eps_time": Param(
-            default=50, 
+            default=50,
             type="number",
-            description="Time in seconds for the pre and post-burst background cut around the source time " \
-                        "window. Default is 1 second.",),
+            minimum=0,
+            description="Seconds before and after the source time window used by the GeD background cut.",
+            section="GeD inputs",
+        ),
+        "lightcurve_path": Param(
+            default=AUTO_INPUT,
+            examples=[AUTO_INPUT, BGO_DEFAULTS["lightcurve"]],
+            type="string",
+            description="BGO light-curve NPZ key. Use __default__ for the BGO preset.",
+            section="BGO inputs",
+        ),
+        "soft_lut_path": Param(
+            default=AUTO_INPUT,
+            examples=[AUTO_INPUT, BGO_DEFAULTS["soft_lut"]],
+            type="string",
+            description="BGO soft-spectrum LUT key. Use __default__ for the BGO preset.",
+            section="BGO inputs",
+        ),
+        "medium_lut_path": Param(
+            default=AUTO_INPUT,
+            examples=[AUTO_INPUT, BGO_DEFAULTS["medium_lut"]],
+            type="string",
+            description="BGO medium-spectrum LUT key. Use __default__ for the BGO preset.",
+            section="BGO inputs",
+        ),
+        "hard_lut_path": Param(
+            default=AUTO_INPUT,
+            examples=[AUTO_INPUT, BGO_DEFAULTS["hard_lut"]],
+            type="string",
+            description="BGO hard-spectrum LUT key. Use __default__ for the BGO preset.",
+            section="BGO inputs",
+        ),
+        "bgo_orientation_path": Param(
+            default=AUTO_INPUT,
+            enum=[AUTO_INPUT, *BGO_ORIENTATION_KEYS],
+            type="string",
+            description="BGO orientation key. Use __default__ for the DC4 orientation preset.",
+            section="BGO inputs",
+        ),
     },
 ) as dag:
 
     # === 1. Prepare raw directories ===
-    def prepare_raw_dirs():
-        # Ensure that all raw data subdirectories exist locally (Airflow side)
-        # Note: DockerOperator will also need these to exist on host if we mount them.
-        for d in RAW_SUBDIRS.values():
-            ensure_dir(d)
-        return {k: str(v) for k, v in RAW_SUBDIRS.items()}
+    def prepare_raw_dirs(**context):
+        branch = normalize_pipeline_branch(context["params"].get("pipeline_branch"))
+        dirs = raw_dirs_for_branch(branch)
+        for directory in dirs.values():
+            ensure_dir(Path(directory))
+        return dirs
 
     t_prepare = PythonOperator(task_id="prepare_raw_dirs", python_callable=prepare_raw_dirs)
 
     # === 2. Resolve configuration ===
-    def resolve_config(**context):
-        # Resolve parameters and input paths
-        p = context["params"]
-        data_challenge = p["data_challenge"].upper()
-        defaults = DATA_CHALLENGE_DEFAULTS[data_challenge]
-
-        def selected_or_default(kind: str) -> str:
-            value = p[f"{kind}_path"]
-            if not value or value == AUTO_INPUT:
-                return defaults[kind]
-            return value
-
-        return {
-            "data_challenge": data_challenge,
-            "wasabi_base": defaults["wasabi_base"],
-            "destination_root": str(DEST_MAP[p["destination"]]),
-            "eps_time": float(p["eps_time"]),
-            "inputs": {
-                "response": selected_or_default("response"),
-                "orientation": selected_or_default("orientation"),
-                "source": selected_or_default("source"),
-                "background": selected_or_default("background"),
-            },
-            "dirs": {k: str(v) for k, v in RAW_SUBDIRS.items()}
-        }
+    def resolve_config(ti, **context):
+        return resolve_pipeline_config(
+            context["params"], ti.xcom_pull(task_ids="prepare_raw_dirs")
+        )
 
     t_resolve = PythonOperator(task_id="resolve_config", python_callable=resolve_config)
 
@@ -466,6 +502,14 @@ with DAG(
     if not HOST_WORKSPACE_PATH:
         raise ValueError("HOST_WORKSPACE_PATH is not set. "
         "Set env var HOST_WORKSPACE_PATH in docker-compose or Airflow Variable COSIDAG_DOCKER_HOST_WORKSPACE_PATH.")
+    # Keep DockerOperator containers on the same host directory mounted as
+    # /home/gamma/workspace/data in the Airflow container.  Cosiflow stores
+    # that archive under data/heasarc; mounting data/ instead makes XCom paths
+    # point at files that do not exist from the child container's perspective.
+    HOST_DATA_PATH = os.getenv(
+        "HOST_DATA_PATH",
+        f"{HOST_WORKSPACE_PATH}/cosiflow/data/heasarc",
+    )
 
     # === 3. Stage all files ===
     t_stage = DockerOperator(
@@ -478,7 +522,7 @@ with DAG(
         # Mount fast-transient-analysis-pipeline code and shared data only
         mounts=[
             Mount(source=f"{HOST_WORKSPACE_PATH}/fast-transient-analysis-pipeline", target="/home/gamma/workspace/fast-transient-analysis-pipeline", type="bind"),
-            Mount(source=f"{HOST_WORKSPACE_PATH}/cosiflow/data", target="/home/gamma/workspace/data", type="bind"),
+            Mount(source=HOST_DATA_PATH, target="/home/gamma/workspace/data", type="bind"),
         ],
         command=[
             "python", STAGE_SCRIPT,
@@ -513,18 +557,28 @@ with DAG(
 
         products_dir = Path(ti.xcom_pull(task_ids="create_products_dir")["products_dir"])
 
-        files_by_kind = {
-            "source":      staged["source"],
-            "response":    staged["response"],
-            "orientation": staged["orientation"],
-            "background":  staged["background"],
-        }
-
-        return make_symlinks(products_dir, files_by_kind)
+        cfg = ti.xcom_pull(task_ids="resolve_config")
+        expected_keys = set(cfg["inputs"])
+        if set(staged) != expected_keys:
+            raise ValueError(
+                f"[init_pipelines:{cfg['pipeline_branch']}] staged keys must be "
+                f"{sorted(expected_keys)}, got {sorted(staged)}"
+            )
+        return make_symlinks(products_dir, staged)
 
     t_link = PythonOperator(task_id="create_symlinks", python_callable=create_symlinks)
 
-    #=== 6. Background cut ===
+    # === 6. Select branch-specific post-processing ===
+    def choose_postprocessing(ti):
+        cfg = ti.xcom_pull(task_ids="resolve_config")
+        return postprocessing_task_for_branch(cfg["pipeline_branch"])
+
+    t_branch = BranchPythonOperator(
+        task_id="select_postprocessing",
+        python_callable=choose_postprocessing,
+    )
+
+    # GeD-only background cut. BGO branches around this task entirely.
     t_bkgcut = DockerOperator(
         task_id="background_cut",
         image=CONTAINER_IMAGE,
@@ -533,7 +587,7 @@ with DAG(
         mount_tmp_dir=False,
         mounts=[
             Mount(source=f"{HOST_WORKSPACE_PATH}/fast-transient-analysis-pipeline", target="/home/gamma/workspace/fast-transient-analysis-pipeline", type="bind"),
-            Mount(source=f"{HOST_WORKSPACE_PATH}/cosiflow/data", target="/home/gamma/workspace/data", type="bind"),
+            Mount(source=HOST_DATA_PATH, target="/home/gamma/workspace/data", type="bind"),
         ],
         command=[
             "python", BKG_CUT_SCRIPT,
@@ -545,4 +599,12 @@ with DAG(
         network_mode="bridge",
     )
 
-    t_prepare >> t_resolve >> t_stage >> t_products >> t_link >> t_bkgcut
+    t_bgo_complete = EmptyOperator(task_id="bgo_staging_complete")
+    t_complete = EmptyOperator(
+        task_id="initialization_complete",
+        trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
+    )
+
+    t_prepare >> t_resolve >> t_stage >> t_products >> t_link >> t_branch
+    t_branch >> [t_bkgcut, t_bgo_complete]
+    [t_bkgcut, t_bgo_complete] >> t_complete
