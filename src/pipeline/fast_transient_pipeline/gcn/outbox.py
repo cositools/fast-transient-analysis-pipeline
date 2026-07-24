@@ -27,6 +27,16 @@ def queue_cosi_alert(
     source_config_path: str | None = None,
     products: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Build a COSI alert, persist its JSON artifact, and queue it in MySQL.
+
+    The DAG identity and notice record number form an idempotency key, so a
+    repeated task run updates the same logical outbox notice instead of
+    creating a duplicate.
+
+    Returns:
+        Metadata identifying the outbox row, Kafka topic, JSON artifact,
+        idempotency key, and payload hash.
+    """
     payload = build_cosi_initial_alert(
         pipeline=pipeline,
         instrument=instrument,
@@ -99,6 +109,12 @@ def build_cosi_initial_alert(
     source_config_path: str | None = None,
     products: dict[str, Any],
 ) -> dict[str, Any]:
+    """Build an initial COSI notice from common and instrument-specific data.
+
+    Environment variables provide schema, event, record, and classification
+    fallbacks. Recognized BGO and GeD pipelines add only their corresponding
+    products; unknown pipelines attempt to add both product sets.
+    """
     now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     normalized_trigger_time = _iso_z(trigger_time) or now
     event_token = _sha256(f"{pipeline}:{dag_run_id}")[:9]
@@ -136,6 +152,8 @@ build_cosi_test_alert = build_cosi_initial_alert
 
 
 def _add_bgo_products(payload: dict[str, Any], products: dict[str, Any]) -> None:
+    """Add BGO duration, significance, shield, and localization fields."""
+
     duration_result = _mapping_from(products.get("duration_result"))
     significance_result = _mapping_from(products.get("significance_result"))
     localization_result = _mapping_from(products.get("localization_result"))
@@ -162,6 +180,8 @@ def _add_ged_products(
     source_product_dir: str | None,
     source_config_path: str | None,
 ) -> None:
+    """Add GeD duration, localization, significance, and spectral fields."""
+
     duration_result = _mapping_from(products.get("duration_result"))
     localization_result = _mapping_from(products.get("localization_result"))
     spectral_result = _mapping_from(products.get("spectral_result"))
@@ -193,6 +213,8 @@ def _write_notice_json(
     source_product_dir: str | None,
     source_config_path: str | None,
 ) -> str:
+    """Write a human-readable copy of the notice to the product directory."""
+
     notice_dir = _notice_directory(source_product_dir, source_config_path)
     notice_dir.mkdir(parents=True, exist_ok=True)
     record_number = payload.get("record_number", 1)
@@ -203,6 +225,8 @@ def _write_notice_json(
 
 
 def _notice_directory(source_product_dir: str | None, source_config_path: str | None) -> Path:
+    """Select the product directory, config directory, or current directory."""
+
     for candidate in [source_product_dir, Path(source_config_path).parent if source_config_path else None]:
         if candidate:
             return Path(candidate).expanduser().resolve()
@@ -210,6 +234,8 @@ def _notice_directory(source_product_dir: str | None, source_config_path: str | 
 
 
 def _insert_outbox_row(row: dict[str, Any]) -> int:
+    """Insert or idempotently update an outbox row and return its database ID."""
+
     try:
         import pymysql
     except ImportError as exc:
@@ -255,14 +281,20 @@ def _insert_outbox_row(row: dict[str, Any]) -> int:
 
 
 def _canonical_json(payload: dict[str, Any]) -> str:
+    """Serialize a payload deterministically for hashing and database storage."""
+
     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
 def _sha256(value: str) -> str:
+    """Return the hexadecimal SHA-256 digest of a UTF-8 string."""
+
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _iso_z(value: Any) -> str | None:
+    """Normalize a datetime-like value to millisecond-resolution UTC ISO 8601."""
+
     if not value:
         return None
     if isinstance(value, datetime):
@@ -281,6 +313,8 @@ def _iso_z(value: Any) -> str | None:
 
 
 def _mysql_datetime(value: Any) -> str | None:
+    """Convert a datetime-like value to a timezone-naive UTC MySQL timestamp."""
+
     normalized = _iso_z(value)
     if not normalized:
         return None
@@ -289,6 +323,8 @@ def _mysql_datetime(value: Any) -> str | None:
 
 
 def _schema_version(schema_url: Any) -> str | None:
+    """Extract the version segment that follows ``/schema/`` in a schema URL."""
+
     if not schema_url:
         return None
     text = str(schema_url)
@@ -299,10 +335,14 @@ def _schema_version(schema_url: Any) -> str | None:
 
 
 def _dict_or_empty(value: Any) -> dict[str, Any]:
+    """Return a dictionary value unchanged, or an empty dictionary otherwise."""
+
     return value if isinstance(value, dict) else {}
 
 
 def _float_or_none(value: Any) -> float | None:
+    """Convert a value to ``float`` and return ``None`` when conversion fails."""
+
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -310,6 +350,8 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def _mapping_from(value: Any) -> dict[str, Any]:
+    """Load a mapping from a dictionary, path, JSON, Python literal, or YAML."""
+
     if isinstance(value, dict):
         return value
     if value is None:
@@ -330,6 +372,8 @@ def _mapping_from(value: Any) -> dict[str, Any]:
 
 
 def _mapping_from_text(text: str, source: str | None = None) -> dict[str, Any]:
+    """Parse mapping text using the supported loaders in precedence order."""
+
     for loader in (_loads_json, _loads_literal, _loads_yaml):
         loaded = loader(text)
         if isinstance(loaded, dict):
@@ -340,6 +384,8 @@ def _mapping_from_text(text: str, source: str | None = None) -> dict[str, Any]:
 
 
 def _loads_json(text: str) -> Any:
+    """Parse JSON text, returning ``None`` instead of raising on invalid data."""
+
     try:
         return json.loads(text)
     except Exception:
@@ -347,6 +393,8 @@ def _loads_json(text: str) -> Any:
 
 
 def _loads_literal(text: str) -> Any:
+    """Parse a Python literal safely, returning ``None`` when it is invalid."""
+
     try:
         return ast.literal_eval(text)
     except Exception:
@@ -354,6 +402,8 @@ def _loads_literal(text: str) -> Any:
 
 
 def _loads_yaml(text: str) -> Any:
+    """Parse YAML when PyYAML is available, otherwise return ``None``."""
+
     try:
         import yaml
     except Exception:
@@ -365,16 +415,22 @@ def _loads_yaml(text: str) -> Any:
 
 
 def _is_bgo_pipeline(pipeline: str, instrument: str) -> bool:
+    """Return whether the pipeline or instrument name identifies the BGO path."""
+
     text = f"{pipeline} {instrument}".lower()
     return "bgo" in text or "shield" in text
 
 
 def _is_ged_pipeline(pipeline: str, instrument: str) -> bool:
+    """Return whether the pipeline or instrument name identifies the GeD path."""
+
     text = f"{pipeline} {instrument}".lower()
     return "ged" in text or "germanium" in text
 
 
 def _classification(products: dict[str, Any]) -> dict[str, float]:
+    """Normalize classification probabilities and provide an uncertain fallback."""
+
     classification_result = _mapping_from(products.get("classification_result"))
     classification = classification_result.get("classification") if "classification" in classification_result else classification_result
     if not isinstance(classification, dict):
@@ -391,6 +447,8 @@ def _classification(products: dict[str, Any]) -> dict[str, float]:
 
 
 def _data_archive_page(event_id: str) -> str | None:
+    """Resolve an explicit archive URL or build one from the configured base."""
+
     explicit = os.getenv("GCN_OUTBOUND_DATA_ARCHIVE_PAGE")
     if explicit:
         return explicit
@@ -401,21 +459,29 @@ def _data_archive_page(event_id: str) -> str | None:
 
 
 def _product_or_env_float(products: dict[str, Any], product_key: str, env_key: str) -> float | None:
+    """Return the first numeric value found in products or the environment."""
+
     return _first_float(products.get(product_key), os.getenv(env_key))
 
 
 def _add_probability(payload: dict[str, Any], key: str, value: Any) -> None:
+    """Add a probability field only when its numeric value lies in ``[0, 1]``."""
+
     probability = _float_or_none(value)
     if probability is not None and 0.0 <= probability <= 1.0:
         payload[key] = probability
 
 
 def _add_optional(payload: dict[str, Any], key: str, value: Any) -> None:
+    """Add an optional field when the supplied value is neither null nor empty."""
+
     if value is not None and value != "":
         payload[key] = value
 
 
 def _add_t90_error(payload: dict[str, Any], duration_result: dict[str, Any]) -> None:
+    """Add asymmetric T90 errors when available, otherwise a scalar error."""
+
     low = _float_or_none(duration_result.get("t90_err_low"))
     high = _float_or_none(duration_result.get("t90_err_high"))
     if low is not None and high is not None and low >= 0 and high >= 0:
@@ -427,6 +493,8 @@ def _add_t90_error(payload: dict[str, Any], duration_result: dict[str, Any]) -> 
 
 
 def _triggered_shields(sigmas: list[Any]) -> list[bool]:
+    """Convert up to six BGO significances into fixed-length trigger flags."""
+
     threshold = _float_or_none(os.getenv("GCN_BGO_TRIGGERED_SHIELD_SIGMA_THRESHOLD")) or 0.0
     flags = []
     for item in sigmas[:6]:
@@ -438,6 +506,8 @@ def _triggered_shields(sigmas: list[Any]) -> list[bool]:
 
 
 def _add_localization(payload: dict[str, Any], localization_result: dict[str, Any]) -> None:
+    """Add equatorial coordinates and optional localization metadata."""
+
     ra = _first_float(
         localization_result.get("ra"),
         localization_result.get("ra_deg"),
@@ -471,6 +541,8 @@ def _add_localization(payload: dict[str, Any], localization_result: dict[str, An
 
 
 def _add_ged_localization(payload: dict[str, Any], localization_result: dict[str, Any]) -> None:
+    """Fill missing equatorial coordinates from a GeD Galactic localization."""
+
     if "ra" in payload and "dec" in payload:
         return
     l_deg = _first_float(localization_result.get("best_l_deg"), localization_result.get("l_deg"))
@@ -483,6 +555,8 @@ def _add_ged_localization(payload: dict[str, Any], localization_result: dict[str
 
 
 def _add_spectral_products(payload: dict[str, Any], spectral_result: dict[str, Any]) -> None:
+    """Copy supported spectral, flux, fluence, and polarization products."""
+
     for key in [
         "best_fit_model",
         "power_law",
@@ -504,6 +578,8 @@ def _add_spectral_products(payload: dict[str, Any], spectral_result: dict[str, A
 
 
 def _number_pair_env(key: str, default: list[float]) -> list[float]:
+    """Read a two-number JSON or comma-separated environment value."""
+
     value = os.getenv(key)
     if not value:
         return default
@@ -517,6 +593,8 @@ def _number_pair_env(key: str, default: list[float]) -> list[float]:
 
 
 def _local_healpix_path(source_product_dir: str | None, source_config_path: str | None) -> str | None:
+    """Return the first local FITS/HEALPix candidate in the product roots."""
+
     roots = []
     if source_product_dir:
         roots.append(Path(source_product_dir))
@@ -534,6 +612,8 @@ def _local_healpix_path(source_product_dir: str | None, source_config_path: str 
 
 
 def _first_float(*values: Any) -> float | None:
+    """Return the first argument that can be converted to a float."""
+
     for value in values:
         parsed = _float_or_none(value)
         if parsed is not None:
@@ -542,6 +622,8 @@ def _first_float(*values: Any) -> float | None:
 
 
 def _first_text(*values: Any) -> str | None:
+    """Return the first non-empty argument converted to text."""
+
     for value in values:
         if value is not None and str(value).strip():
             return str(value)
@@ -549,6 +631,8 @@ def _first_text(*values: Any) -> str | None:
 
 
 def _bool_or_none(value: Any) -> bool | None:
+    """Parse common boolean spellings, returning ``None`` when ambiguous."""
+
     if isinstance(value, bool):
         return value
     if value is None:
@@ -562,6 +646,8 @@ def _bool_or_none(value: Any) -> bool | None:
 
 
 def _galactic_to_icrs(l_deg: float, b_deg: float) -> tuple[float, float]:
+    """Convert Galactic longitude/latitude in degrees to ICRS RA/Dec."""
+
     l_rad = math.radians(l_deg)
     b_rad = math.radians(b_deg)
     gal = (
