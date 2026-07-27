@@ -83,8 +83,12 @@ def _plot_identity(
     trigger_time: Any = None,
     plot_name: str | None = None,
     preview_title: str | None = None,
+    other_metadata: dict[str, str] | None = None,
 ) -> tuple[str, dict[str, str]]:
-    """Return a uniform on-figure title and searchable PNG text metadata."""
+    """Return a uniform on-figure title and searchable PNG text metadata.
+    # Parameters
+    * other_metadata: optional dict of additional metadata fields to include in the PNG.
+    """
     from datetime import datetime, timezone
 
     generated_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -100,6 +104,10 @@ def _plot_identity(
     if plot_name:
         title = f"{title}\n{plot_name}"
 
+    if other_metadata is None:
+        print("WARNING: No other_metadata provided; metadata will be incomplete.")
+        other_metadata = {}
+    # Aggregate metadata for the PNG file with the other_metadata if provided.
     metadata = {
         "Title": title.replace("\n", " — "),
         "Description": caption,
@@ -108,7 +116,8 @@ def _plot_identity(
         "PreviewTitle": preview_title or plot_name or f"COSI {instrument} Plot",
         "TriggerTime": trigger_label,
         "GeneratedUTC": generated_utc,
-    }
+    } | other_metadata
+    #.update(other_metadata)
     return title, metadata
 
 
@@ -664,7 +673,7 @@ def light_curve_generation(
         counts_caption,
         trigger_time,
         f"Panel {panel} counts light curve",
-        preview_title="BGO Light Curve",
+        preview_title=f"BGO ACS panel {panel} Light Curve",
     )
     fig1, ax1 = plt.subplots(figsize=(10, 4))
     ax1.step(
@@ -685,8 +694,8 @@ def light_curve_generation(
 
     # Plot 2: raw rate + fitted background + Bayesian blocks + signal boundaries
     analysis_caption = (
-        f"COSI BGO duration analysis for shield panel {panel}. Grey measurements "
-        "with error bars show the observed count rate, the red dotted curve is "
+        f"Bayesian-Blocks Analysis of the BGO ACS panel {panel} Light Curve. "
+        "Grey measurements with error bars show the observed count rate, the red dotted curve is "
         "the fitted polynomial background, and the blue step curve is the "
         "Bayesian-blocks model. Olive dashed lines mark the inferred signal "
         "interval used to estimate T90."
@@ -699,7 +708,7 @@ def light_curve_generation(
             f"Panel {panel} Bayesian-blocks analysis - "
             f"T90={t90:.3f} (+{t90_err_high:.3f}/-{t90_err_low:.3f}) s"
         ),
-        preview_title="BGO Light Curve",
+        preview_title=f"Bayesian-Blocks Analysis of the BGO ACS panel {panel} Light Curve",
     )
     fig2, ax2 = plt.subplots(figsize=(10, 4))
     ax2.plot(
@@ -927,49 +936,104 @@ def localize_bctools(
     # are already on a sky grid and can be evaluated directly.
     print("s_counts_arr:", s_counts_arr)
     print("b_counts_arr:", b_counts_arr)
-    result = localizer.localize(s_counts_arr, b_counts_arr, attitude=attitude)
+    result = localizer.localize(
+        s_counts_arr,
+        b_counts_arr,
+        attitude=attitude,
+        conf_level=0.9,
+    )
     print("[localize_grb] Localization result:", result)
-    # The localization result contains the best-fit Galactic coordinates (l, b) and a TS map.
-    best_loc = SkyCoord(l=result['l']*u.deg, b=result['b']*u.deg, frame="galactic")
-    # Plot the TS map with the best-fit location marked.
+    # Both figures represent the same localization result.  Only their displayed
+    # TS range changes.
+    best_loc = SkyCoord(
+        l=result["l"] * u.deg,
+        b=result["b"] * u.deg,
+        frame="galactic",
+    )
     ts_map = result["ts_map"]
-    # Plot the TS map with the best-fit location marked.
-    img, ax = ts_map.plot(cont=0.9)
-    ax.grid(alpha=0.5)
-    ax.scatter(
-        best_loc.l.to(u.deg).value,#best_loc.icrs.ra.to(u.deg).value,
-        best_loc.b.to(u.deg).value,#best_loc.icrs.dec.to(u.deg).value,
-        color="red",
-        transform=ax.get_transform("world"),
-        s=2,
-        label="Best localization"
+    best_fit_label = (
+        f"({best_loc.l.to(u.deg).value:.3f}, "
+        f"{best_loc.b.to(u.deg).value:.3f})"
+    )
+    print(f"[localize_grb] Best-fit localization (l, b): {best_fit_label}")
+
+    localization_plots = (
+        {
+            "plot_kwargs": {"cont": 0.9},
+            "caption": (
+                "COSI BGO ACS all-sky likelihood-ratio localization TS map in "
+                "Galactic coordinates restricted to the 90% containment TS range. "
+                "Pixel colors encode the localization test statistic and the red "
+                "marker identifies the best-fit transient position."
+            ),
+            "plot_name": (
+                "BGO panel-pattern localization skymap — 90% confidence level"
+            ),
+            "preview_title": (
+                "BGO ACS localization TS map — 90% confidence level"
+            ),
+            "containment_display": "90% TS range",
+            "filename": "bgo_localization_tsmap.png",
+        },
+        {
+            # TSMap.plot defaults to cont=0.9.  Supplying vmin overrides that
+            # threshold and displays the complete finite TS range.
+            "plot_kwargs": {"vmin": float(np.nanmin(ts_map.data))},
+            "caption": (
+                "COSI BGO ACS all-sky likelihood-ratio localization TS map in "
+                "Galactic coordinates over the full TS range, without a "
+                "containment-based display threshold. Pixel colors encode the "
+                "localization test statistic and the red marker identifies the "
+                "best-fit transient position. "
+            ),
+            "plot_name": (
+                "BGO panel-pattern localization skymap — full TS range"
+            ),
+            "preview_title": (
+                "BGO ACS localization TS map — full TS range"
+            ),
+            "containment_display": "None (full TS range)",
+            "filename": "bgo_localization_tsmap_no_containment.png",
+        },
+    )
+
+    for plot_spec in localization_plots:
+        _, ax = ts_map.plot(**plot_spec["plot_kwargs"])
+        ax.grid(alpha=0.5)
+        ax.scatter(
+            best_loc.l.to(u.deg).value,
+            best_loc.b.to(u.deg).value,
+            color="red",
+            transform=ax.get_transform("world"),
+            s=2,
+            label="Best localization",
         )
-    localization_caption = (
-        "COSI BGO all-sky localization test-statistic map in Galactic "
-        "coordinates. Pixel colors encode the localization test statistic, the "
-        "contour encloses the 90% confidence region, and the red marker identifies "
-        "the best-fit transient position."
-    )
-    localization_title, localization_metadata = _plot_identity(
-        "BGO",
-        localization_caption,
-        trigger_time,
-        "BGO panel-pattern localization skymap",
-        preview_title="BGO TS Map",
-    )
-    ax.set_xlabel("Galactic longitude l [deg]")
-    ax.set_ylabel("Galactic latitude b [deg]")
-    ax.set_title(localization_title)
-    # Add legend 
-    ax.legend(loc="upper right", frameon=True)
-    # Save the plot
-    plot_path = plots_dir / "bgo_localization.png"
-    fig = ax.figure
-    fig.savefig(
-        plot_path,
-        dpi=150,
-        bbox_inches="tight",
-        metadata=localization_metadata,
-    )
-    plt.close(fig)
+        localization_title, localization_metadata = _plot_identity(
+            "BGO",
+            plot_spec["caption"],
+            trigger_time,
+            plot_spec["plot_name"],
+            preview_title=plot_spec["preview_title"],
+            other_metadata={
+                "best_fit (l, b)": best_fit_label,
+                "ContainmentDisplay": plot_spec["containment_display"],
+            },
+        )
+        ax.set_xlabel("Galactic longitude l [deg]")
+        ax.set_ylabel("Galactic latitude b [deg]")
+        ax.set_title(localization_title)
+        ax.legend(loc="upper right", frameon=True)
+
+        fig = ax.figure
+        fig.set_size_inches(12, 6, forward=True)
+        print("[localize_grb] Saving localization plot arguments:",
+              f"{plots_dir / plot_spec['filename']}",
+              f"with metadata: {localization_metadata}")
+        fig.savefig(
+            plots_dir / plot_spec["filename"],
+            dpi=150,
+            bbox_inches="tight",
+            metadata=localization_metadata,
+        )
+        plt.close(fig)
     return str(plots_dir)
