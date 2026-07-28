@@ -1,8 +1,4 @@
-"""
-COSIDAG GeD (bottom row).
-
-This DAG is the Phase-1 interface draft for the GeD branch of the fast transient pipeline.
-"""
+"""Binned GeD branch of the fast transient pipeline."""
 from datetime import datetime
 
 import sys
@@ -13,7 +9,6 @@ from cosidag import COSIDAG
 from cosidag import cfg
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import ExternalPythonOperator, PythonOperator
-from numpy import ndarray
 
 
 def build_custom(dag):
@@ -35,29 +30,10 @@ def build_custom(dag):
     # Preprocessing turns those paths into the shared pipeline_config.yaml.
     SOURCE_FILE = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='grb_file') }}"
     BACKGROUND_FILE = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='background_file') }}"
-    SOFT_LUT = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='soft_lut_file') }}"
-    MEDIUM_LUT = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='medium_lut_file') }}"
-    HARD_LUT = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='hard_lut_file') }}"
     ORIENTATION_FILE = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='orientation_file') }}"
     RESPONSE_FILE = "{{ ti.xcom_pull(task_ids='resolve_inputs', key='response_file') }}"
     TRIGGER_TIME = "{{ ts }}"
     GED_ANALYSIS_CONFIG = {
-        "unbinned_light_curve": {
-            "arm-min": -15.0,
-            "arm-max": 15.0,
-            "bin": 1.0,
-            "out-prefix": "lc",
-            "arm-hist-bins": 30,
-            "format": "png",
-            "diagnostics": True,
-            "col-time": "TimeTags",
-            "col-l": "Chi galactic",
-            "col-b": "Psi galactic",
-            "col-phi": "Phi",
-            "plot_figsize": [8, 4],
-            "diagnostics_figsize": [14, 10],
-            "plot_dpi": 200,
-        },
         "default_spectrum": {
             "index": -2.2,
             "K": 10.0,
@@ -123,38 +99,6 @@ def build_custom(dag):
             "plot_figsize": [10, 4],
             "plot_dpi": 150,
         },
-        "fast_localize": {
-            "off_pre": 20.0,
-            "off_gap": 5.0,
-            "off_fallback_strategy": "on_background",
-            "arm_min": -13.0,
-            "arm_max": 13.0,
-            "nside": 32,
-            "nsides": None,
-            "pix_chunk": 256,
-            "event_chunk": 200000,
-            "topk": 50,
-            "out_prefix": "grb",
-            "true_l_deg": None,
-            "true_b_deg": None,
-            "suppress_mmap_warning": True,
-            "make_lc": False,
-            "lc_bin": 1.0,
-            "lc_arm_min": None,
-            "lc_arm_max": None,
-            "lc_diagnostics": False,
-            "lc_script": "make_timeseries_all.py",
-            "col_time": "TimeTags",
-            "col_l": "Chi galactic",
-            "col_b": "Psi galactic",
-            "col_phi": "Phi",
-            "map_plot_figsize": [10, 6],
-            "map_plot_dpi": 220,
-            "nside_table_figsize_width": 14,
-            "nside_table_figsize_base_height": 2.4,
-            "nside_table_figsize_row_height": 0.38,
-            "nside_table_dpi": 240,
-        },
     }
     # ==============================================
     # 3. External callables
@@ -202,6 +146,9 @@ def build_custom(dag):
             "pipeline_name": "GeD",
             "cosidag_id": "cosidag_GeD",
             "trigger_time": trigger_time,
+            # The unbinned prepared event product belongs to
+            # cosidag_ARMselection after the DAG split.
+            "prepare_event_data": False,
             "analysis_config": analysis_config,
             "input_resolved": {
                 "source_path": source_file,
@@ -211,19 +158,6 @@ def build_custom(dag):
             },
         }
         return preprocess_data(payload)
-
-    # ---- 3.2. _run_data_binning
-    def _run_unbinned_light_curve_generation(lib_dir: str, config_path: str):
-        import os
-        import sys
-
-        if not config_path or not os.path.exists(config_path):
-            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
-
-        sys.path.insert(0, lib_dir)
-        from ged_functions import unbinned_light_curve_generation
-
-        return unbinned_light_curve_generation(config_path)
 
     # ---- 3.3. _run_data_binning
     def _run_data_binning(lib_dir: str, config_path: str):
@@ -339,7 +273,6 @@ def build_custom(dag):
         trigger_time: str,
         config_path=None,
         duration_result=None,
-        localization_result=None,
         topic=None,
     ):
         import os
@@ -360,51 +293,14 @@ def build_custom(dag):
             source_config_path=config_path,
             products={
                 "duration_result": duration_result,
-                "localization_result": localization_result,
             },
         )
-
-    def _run_light_curve_analysis(lib_dir: str, config_path: str):
-        import os
-        import sys
-
-        if not config_path or not os.path.exists(config_path):
-            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
-
-        sys.path.insert(0, lib_dir)
-        from ged_functions import light_curve_analysis
-
-        return light_curve_analysis(config_path)
-
-    def _run_skymap_unbinned(lib_dir: str, config_path: str):
-        import os
-        import sys
-
-        if not config_path or not os.path.exists(config_path):
-            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
-
-        sys.path.insert(0, lib_dir)
-        from ged_functions import skymap_unbinned
-
-        return skymap_unbinned(config_path)
-
-    def _run_duration_and_localization_results(lib_dir: str, config_path: str):
-        import os
-        import sys
-
-        if not config_path or not os.path.exists(config_path):
-            raise FileNotFoundError(f"config_path not found from preprocessing output: {config_path}")
-
-        sys.path.insert(0, lib_dir)
-        from ged_functions import duration_and_localization_results
-
-        return duration_and_localization_results(config_path)
 
     # ======================================================================
     # DAG-GeD (bottom row)
     # ======================================================================
-    # The GeD branch has two analysis tracks: an unbinned fast-localization
-    # branch and a binned COSIpy branch. Both publish final products to GCN_GeD.
+    # The unbinned ARM/localization track is defined in
+    # cosidag_ARMselection.py. This DAG owns only the binned COSIpy track.
     # Node 1. PreProcessing_GeD
     ged_pre_processing = ExternalPythonOperator(
         task_id="PreProcessing_GeD",
@@ -422,58 +318,11 @@ def build_custom(dag):
         dag=dag,
     )
 
-    # Node 2. Unbinned_Light_Curve_Generation
-    ged_unbinned_light_curve_generation = ExternalPythonOperator(
-        task_id="Unbinned_Light_Curve_Generation",
-        python=EXTERNAL_PYTHON_COSIPY,
-        python_callable=_run_unbinned_light_curve_generation,
-        op_kwargs={
-            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
-            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
-        },
-        dag=dag,
-    )
-
     # Node 3. Data_Binning
     ged_data_binning = ExternalPythonOperator(
         task_id="Data_Binning",
         python=EXTERNAL_PYTHON_COSIPY,
         python_callable=_run_data_binning,
-        op_kwargs={
-            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
-            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
-        },
-        dag=dag,
-    )
-
-    # Node 4. Light_Curve_Analysis (ON/OFF + Li&Ma prep)
-    ged_light_curve_analysis = ExternalPythonOperator(
-        task_id="Light_Curve_Analysis",
-        python=EXTERNAL_PYTHON_COSIPY,
-        python_callable=_run_light_curve_analysis,
-        op_kwargs={
-            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
-            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
-        },
-        dag=dag,
-    )
-
-    # Node 4.1. Skymap_unbinned (HEALPix significance map)
-    ged_skymap_unbinned = ExternalPythonOperator(
-        task_id="Skymap_unbinned",
-        python=EXTERNAL_PYTHON_COSIPY,
-        python_callable=_run_skymap_unbinned,
-        op_kwargs={
-            "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
-            "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
-        },
-        dag=dag,
-    )
-    # Node 5. Duration_and_Localization_Results (best pixel, CSV/PNG, optional LC script)
-    ged_duration_and_localization_results = ExternalPythonOperator(
-        task_id="Duration_and_Localization_Results",
-        python=EXTERNAL_PYTHON_COSIPY,
-        python_callable=_run_duration_and_localization_results,
         op_kwargs={
             "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
             "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
@@ -535,7 +384,6 @@ def build_custom(dag):
             "trigger_time": "{{ ts }}",
             "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
             "duration_result": "{{ ti.xcom_pull(task_ids='Duration', key='return_value') }}",
-            "localization_result": "{{ ti.xcom_pull(task_ids='Duration_and_Localization_Results', key='return_value') }}",
             "topic": cfg("GCN_GED_OUTBOUND_TOPIC", cfg("GCN_OUTBOUND_TOPIC_DEFAULT", "gcn.notices.cosi.ged.test.alert")),
         },
         dag=dag,
@@ -546,12 +394,9 @@ def build_custom(dag):
     # ==============================================
     # Diagram wiring. Large data products stay on disk; XCom carries config
     # paths and compact result payloads.
-    ged_pre_processing >> [ged_unbinned_light_curve_generation, ged_data_binning]
-
-    ged_unbinned_light_curve_generation >> ged_light_curve_analysis >> ged_skymap_unbinned >> ged_duration_and_localization_results
+    ged_pre_processing >> ged_data_binning
     ged_data_binning >> ged_tsmap_on_timescales >> ged_light_curve >> ged_duration >> ged_spectral_analysis >> ged_classification
-    for node in [ged_classification, ged_duration_and_localization_results]:
-        node >> ged_gcn
+    ged_classification >> ged_gcn
 
 
 # ==============================================
