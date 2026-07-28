@@ -247,6 +247,9 @@ def build_custom(dag):
     def _run_light_curve_generation(
         lib_dir: str,
         config_path: str,
+        dag_id: str,
+        dag_run_id: str,
+        task_id: str,
     ):
         import sys
         import os
@@ -285,6 +288,9 @@ def build_custom(dag):
                     "trigger_time"
                 )
             ),
+            dag_id=dag_id,
+            dag_run_id=dag_run_id,
+            task_id=task_id,
         )
 
         result = {
@@ -318,6 +324,9 @@ def build_custom(dag):
     def _run_localization_bctools(
         lib_dir: str,
         config_path: str,
+        dag_id: str,
+        dag_run_id: str,
+        task_id: str,
         background_result=None,
         duration_result=None,
     ):
@@ -389,6 +398,9 @@ def build_custom(dag):
                     "trigger_time"
                 )
             ),
+            dag_id=dag_id,
+            dag_run_id=dag_run_id,
+            task_id=task_id,
         )
 
         result = {
@@ -585,6 +597,9 @@ def build_custom(dag):
         op_kwargs={
             "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
             "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_BGO', key='return_value') }}",
+            "dag_id": "{{ dag.dag_id }}",
+            "dag_run_id": "{{ run_id }}",
+            "task_id": "Light_Curve_generation",
         },
         dag=dag,
     )
@@ -617,6 +632,9 @@ def build_custom(dag):
         op_kwargs={
             "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
             "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_BGO', key='return_value') }}",
+            "dag_id": "{{ dag.dag_id }}",
+            "dag_run_id": "{{ run_id }}",
+            "task_id": "Localization_bc_tools",
             "background_result": "{{ ti.xcom_pull(task_ids='Background_extraction_and_data_preparation', key='return_value') }}",
             "duration_result": "{{ ti.xcom_pull(task_ids='Duration_on_different_binning', key='return_value') }}",
         },

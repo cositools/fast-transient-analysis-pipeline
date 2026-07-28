@@ -226,7 +226,13 @@ def build_custom(dag):
         }
 
     # ---- 3.4. _run_tsmap
-    def _run_tsmap(lib_dir: str, config_path: str):
+    def _run_tsmap(
+        lib_dir: str,
+        config_path: str,
+        dag_id: str,
+        dag_run_id: str,
+        task_id: str,
+    ):
         import os
         import sys
 
@@ -236,10 +242,21 @@ def build_custom(dag):
         sys.path.insert(0, lib_dir)
         from ged_functions import compute_ts_map
 
-        return compute_ts_map(config_path)
+        return compute_ts_map(
+            config_path,
+            dag_id=dag_id,
+            dag_run_id=dag_run_id,
+            task_id=task_id,
+        )
 
     # ---- 3.5. _run_light_curve
-    def _run_light_curve(lib_dir: str, config_path: str):
+    def _run_light_curve(
+        lib_dir: str,
+        config_path: str,
+        dag_id: str,
+        dag_run_id: str,
+        task_id: str,
+    ):
         import os
         import sys
 
@@ -249,10 +266,21 @@ def build_custom(dag):
         sys.path.insert(0, lib_dir)
         from ged_functions import light_curve
 
-        return light_curve(config_path)
+        return light_curve(
+            config_path,
+            dag_id=dag_id,
+            dag_run_id=dag_run_id,
+            task_id=task_id,
+        )
 
     # ---- 3.6. _run_duration
-    def _run_duration(lib_dir: str, config_path: str):
+    def _run_duration(
+        lib_dir: str,
+        config_path: str,
+        dag_id: str,
+        dag_run_id: str,
+        task_id: str,
+    ):
         import os
         import sys
 
@@ -262,7 +290,12 @@ def build_custom(dag):
         sys.path.insert(0, lib_dir)
         from ged_functions import duration
 
-        return duration(config_path)
+        return duration(
+            config_path,
+            dag_id=dag_id,
+            dag_run_id=dag_run_id,
+            task_id=task_id,
+        )
 
     # ---- 3.10. _queue_gcn_outbox_notice
     def _queue_gcn_outbox_notice(
@@ -338,6 +371,9 @@ def build_custom(dag):
         op_kwargs={
             "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
             "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
+            "dag_id": "{{ dag.dag_id }}",
+            "dag_run_id": "{{ run_id }}",
+            "task_id": "TS_Map_on_different_timescales",
         },
         dag=dag,
     )
@@ -350,6 +386,9 @@ def build_custom(dag):
         op_kwargs={
             "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
             "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
+            "dag_id": "{{ dag.dag_id }}",
+            "dag_run_id": "{{ run_id }}",
+            "task_id": "Light_Curve",
         },
         dag=dag,
     )
@@ -362,6 +401,9 @@ def build_custom(dag):
         op_kwargs={
             "lib_dir": LIB_DIR_FAST_TRANSIENT_PIPELINE,
             "config_path": "{{ ti.xcom_pull(task_ids='PreProcessing_GeD', key='return_value') }}",
+            "dag_id": "{{ dag.dag_id }}",
+            "dag_run_id": "{{ run_id }}",
+            "task_id": "Duration",
         },
         dag=dag,
     )

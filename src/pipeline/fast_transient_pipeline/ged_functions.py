@@ -172,9 +172,19 @@ def _plot_identity(
     trigger_time: Any = None,
     plot_name: str | None = None,
     preview_title: str | None = None,
+    dag_id: str | None = None,
+    dag_run_id: str | None = None,
+    task_id: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """Return a uniform on-figure title and searchable PNG text metadata."""
+    import os
     from datetime import datetime, timezone
+
+    def _context_value(value: Any, environment_key: str) -> str:
+        resolved = value
+        if resolved in (None, ""):
+            resolved = os.environ.get(environment_key)
+        return str(resolved) if resolved not in (None, "") else "N/A"
 
     generated_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     trigger_label = (
@@ -197,6 +207,9 @@ def _plot_identity(
         "PreviewTitle": preview_title or plot_name or f"COSI {instrument} Plot",
         "TriggerTime": trigger_label,
         "GeneratedUTC": generated_utc,
+        "DAGID": _context_value(dag_id, "AIRFLOW_CTX_DAG_ID"),
+        "DAGRunID": _context_value(dag_run_id, "AIRFLOW_CTX_DAG_RUN_ID"),
+        "DAGTaskID": _context_value(task_id, "AIRFLOW_CTX_TASK_ID"),
     }
     return title, metadata
 
@@ -666,7 +679,11 @@ def bin_data(config_path: str) -> tuple[str, str]:
 # TASK 6: TS_Map_on_different_timescales
 #########################################################
 def compute_ts_map(
-    config_path: str) -> str:
+    config_path: str,
+    dag_id: str | None = None,
+    dag_run_id: str | None = None,
+    task_id: str = "TS_Map_on_different_timescales",
+) -> str:
     """
     Compute TS map for the source and background data.
     Returns the path to the TS map file.
@@ -791,6 +808,9 @@ def compute_ts_map(
         trigger_time,
         f"Fixed-resolution likelihood-ratio TS map (NSIDE={nside})",
         preview_title="COSI GeD fixed-resolution TS map",
+        dag_id=dag_id,
+        dag_run_id=dag_run_id,
+        task_id=task_id,
     )
     fig_fast = plt.figure(figsize=(10, 6), dpi=plot_dpi)
     hp.mollview(
@@ -866,6 +886,9 @@ def compute_ts_map(
             f"(maximum-TS cell NSIDE={moc_nside})"
         ),
         preview_title="COSI GeD multi-order TS map",
+        dag_id=dag_id,
+        dag_run_id=dag_run_id,
+        task_id=task_id,
     )
     moc_plot_map = HealpixMap(data=moc_ts, uniq=moc_uniq)
     fig_moc = plt.figure(figsize=(10, 6), dpi=plot_dpi)
@@ -946,7 +969,11 @@ def compute_ts_map(
 # TASK 7: Light_Curve
 #########################################################
 def light_curve(
-    config_path: str) -> str:
+    config_path: str,
+    dag_id: str | None = None,
+    dag_run_id: str | None = None,
+    task_id: str = "Light_Curve",
+) -> str:
     """
     Generate the light curve of the source and background data.
     Returns the path to the light curve file.
@@ -1123,6 +1150,9 @@ def light_curve(
         _config_trigger_time(config, "GeD"),
         "Point-source-response-selected count light curve",
         preview_title="COSI GeD response-selected light curve",
+        dag_id=dag_id,
+        dag_run_id=dag_run_id,
+        task_id=task_id,
     )
     fig_lc, ax_lc = plt.subplots(figsize=tuple(lightcurve_cfg.get("plot_figsize", [10, 4])))
     ax_lc.step(
@@ -1187,7 +1217,12 @@ def light_curve(
 #########################################################
 # TASK 8: Duration  
 #########################################################
-def duration(config_path: str) -> str:
+def duration(
+    config_path: str,
+    dag_id: str | None = None,
+    dag_run_id: str | None = None,
+    task_id: str = "Duration",
+) -> str:
     """
     Compute the duration of the source and background data.
     Returns the path to the duration file.
@@ -1298,6 +1333,9 @@ def duration(config_path: str) -> str:
             figsize=duration_cfg.get("plot_figsize", [10, 4]),
             dpi=int(duration_cfg.get("plot_dpi", 150)),
             trigger_time=_config_trigger_time(config, "GeD"),
+            dag_id=dag_id,
+            dag_run_id=dag_run_id,
+            task_id=task_id,
         )
 
     duration_payload = {
@@ -1537,6 +1575,9 @@ def plot_duration(
     figsize: list[float] | tuple[float, float] = (10, 4),
     dpi: int = 150,
     trigger_time: Any = None,
+    dag_id: str | None = None,
+    dag_run_id: str | None = None,
+    task_id: str = "Duration",
 ) -> None:
     """
     Plot the duration of the source and background data.
@@ -1566,6 +1607,9 @@ def plot_duration(
         trigger_time,
         "Bayesian-block analysis of the GeD light curve",
         preview_title="COSI GeD Bayesian-block light-curve analysis",
+        dag_id=dag_id,
+        dag_run_id=dag_run_id,
+        task_id=task_id,
     )
     fig, ax = plt.subplots(figsize=tuple(figsize))
     ax.plot(

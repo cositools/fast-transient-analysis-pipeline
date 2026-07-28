@@ -84,12 +84,21 @@ def _plot_identity(
     plot_name: str | None = None,
     preview_title: str | None = None,
     other_metadata: dict[str, str] | None = None,
+    dag_id: str | None = None,
+    dag_run_id: str | None = None,
+    task_id: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """Return a uniform on-figure title and searchable PNG text metadata.
     # Parameters
     * other_metadata: optional dict of additional metadata fields to include in the PNG.
     """
     from datetime import datetime, timezone
+
+    def _context_value(value: Any, environment_key: str) -> str:
+        resolved = value
+        if resolved in (None, ""):
+            resolved = os.environ.get(environment_key)
+        return str(resolved) if resolved not in (None, "") else "N/A"
 
     generated_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     trigger_label = (
@@ -105,7 +114,6 @@ def _plot_identity(
         title = f"{title}\n{plot_name}"
 
     if other_metadata is None:
-        print("WARNING: No other_metadata provided; metadata will be incomplete.")
         other_metadata = {}
     # Aggregate metadata for the PNG file with the other_metadata if provided.
     metadata = {
@@ -116,6 +124,9 @@ def _plot_identity(
         "PreviewTitle": preview_title or plot_name or f"COSI {instrument} Plot",
         "TriggerTime": trigger_label,
         "GeneratedUTC": generated_utc,
+        "DAGID": _context_value(dag_id, "AIRFLOW_CTX_DAG_ID"),
+        "DAGRunID": _context_value(dag_run_id, "AIRFLOW_CTX_DAG_RUN_ID"),
+        "DAGTaskID": _context_value(task_id, "AIRFLOW_CTX_TASK_ID"),
     } | other_metadata
     #.update(other_metadata)
     return title, metadata
@@ -607,6 +618,9 @@ def light_curve_generation(
     order: int = 2,
     show: bool = False,
     trigger_time: Any = None,
+    dag_id: str | None = None,
+    dag_run_id: str | None = None,
+    task_id: str = "Light_Curve_generation",
 ):
     """
     Generate and save light-curve plots from Bayesian-Blocks step output.
@@ -673,6 +687,9 @@ def light_curve_generation(
         trigger_time,
         f"BGO ACS panel {panel} count light curve",
         preview_title=f"COSI BGO ACS panel {panel} count light curve",
+        dag_id=dag_id,
+        dag_run_id=dag_run_id,
+        task_id=task_id,
     )
     fig1, ax1 = plt.subplots(figsize=(10, 4))
     ax1.step(
@@ -713,6 +730,9 @@ def light_curve_generation(
         preview_title=(
             f"COSI BGO ACS panel {panel} Bayesian-block light-curve analysis"
         ),
+        dag_id=dag_id,
+        dag_run_id=dag_run_id,
+        task_id=task_id,
     )
     fig2, ax2 = plt.subplots(figsize=(10, 4))
     ax2.plot(
@@ -864,6 +884,9 @@ def localize_bctools(
     b_counts_arr: np.ndarray,
     tstart: float,
     trigger_time: Any = None,
+    dag_id: str | None = None,
+    dag_run_id: str | None = None,
+    task_id: str = "Localization_bc_tools",
 ) -> tuple[str, dict]:
     """
     Run BGO localization with BC tools.
@@ -1030,6 +1053,9 @@ def localize_bctools(
             trigger_time,
             plot_spec["plot_name"],
             preview_title=plot_spec["preview_title"],
+            dag_id=dag_id,
+            dag_run_id=dag_run_id,
+            task_id=task_id,
             other_metadata={
                 "best_fit (l, b)": best_fit_label,
                 "ContainmentDisplay": plot_spec["containment_display"],
