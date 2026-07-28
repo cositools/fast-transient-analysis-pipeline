@@ -51,7 +51,7 @@ def build_custom(dag):
             "map_scheme": "nested",
             "coordsys": "galactic",
             "fast_plot_name": "tsmap_fast.png",
-            "moc_plot_name": "tsmap_moc.png",
+            "moc_plot_name": "ged_multiorder_likelihood_tsmap.png",
             "plot_dpi": 300,
         },
         "binning_data": {

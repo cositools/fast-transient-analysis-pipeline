@@ -35,7 +35,7 @@ BGO_ANALYSIS_DEFAULTS: dict[str, Any] = {
     "localization_bctools": {
         "nside": 64,
         "counts_order": ["BGO_X0", "BGO_X1", "BGO_Y0", "BGO_Y1", "BGO_Z0", "BGO_Z1"],
-        "output_plot_name": "bgo_localization.png",
+        "output_plot_name": "bgo_acs_grb_localization_tsmap_90cl.png",
     },
 }
 
@@ -664,16 +664,15 @@ def light_curve_generation(
 
     # Plot 1: raw counts light curve
     counts_caption = (
-        f"COSI BGO light curve for shield panel {panel}. The blue step histogram "
-        "shows the measured counts in each time bin; bin centers are plotted on "
-        "the horizontal axis and counts per bin on the vertical axis."
+        f"Measured counts per time bin for COSI BGO ACS panel {panel}. "
+        "The light curve is shown before background subtraction."
     )
     counts_title, counts_metadata = _plot_identity(
         "BGO",
         counts_caption,
         trigger_time,
-        f"Panel {panel} counts light curve",
-        preview_title=f"BGO ACS panel {panel} Light Curve",
+        f"BGO ACS panel {panel} count light curve",
+        preview_title=f"COSI BGO ACS panel {panel} count light curve",
     )
     fig1, ax1 = plt.subplots(figsize=(10, 4))
     ax1.step(
@@ -689,26 +688,31 @@ def light_curve_generation(
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     fig1.tight_layout()
-    light_curve_path = plots_dir / f"light_curve_{panel}.png"
+    light_curve_path = (
+        plots_dir / f"bgo_acs_panel_{panel}_count_lightcurve.png"
+    )
     fig1.savefig(light_curve_path, dpi=150, metadata=counts_metadata)
 
     # Plot 2: raw rate + fitted background + Bayesian blocks + signal boundaries
     analysis_caption = (
-        f"Bayesian-Blocks Analysis of the BGO ACS panel {panel} Light Curve. "
-        "Grey measurements with error bars show the observed count rate, the red dotted curve is "
-        "the fitted polynomial background, and the blue step curve is the "
-        "Bayesian-blocks model. Olive dashed lines mark the inferred signal "
-        "interval used to estimate T90."
+        f"Bayesian-block analysis of the COSI BGO ACS panel {panel} light curve. "
+        "Grey points show the observed count rate, the red dotted curve the fitted "
+        "polynomial background, and the blue step curve the Bayesian-block model. "
+        "Green dashed lines delimit the identified signal interval. The T90 estimate "
+        "and its uncertainties are reported in the title."
     )
     analysis_title, analysis_metadata = _plot_identity(
         "BGO",
         analysis_caption,
         trigger_time,
         (
-            f"Panel {panel} Bayesian-blocks analysis - "
-            f"T90={t90:.3f} (+{t90_err_high:.3f}/-{t90_err_low:.3f}) s"
+            f"Bayesian-block analysis of COSI BGO ACS panel {panel} — "
+            f"T90 = {t90:.3f} "
+            f"(+{t90_err_high:.3f}/-{t90_err_low:.3f}) s"
         ),
-        preview_title=f"Bayesian-Blocks Analysis of the BGO ACS panel {panel} Light Curve",
+        preview_title=(
+            f"COSI BGO ACS panel {panel} Bayesian-block light-curve analysis"
+        ),
     )
     fig2, ax2 = plt.subplots(figsize=(10, 4))
     ax2.plot(
@@ -742,7 +746,10 @@ def light_curve_generation(
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     fig2.tight_layout()
-    background_fit_path = plots_dir / f"light_curve_background_t90_bblocks_{panel}.png"
+    background_fit_path = (
+        plots_dir
+        / f"bgo_acs_panel_{panel}_bayesian_blocks_lightcurve_analysis.png"
+    )
     fig2.savefig(background_fit_path, dpi=150, metadata=analysis_metadata)
 
     if show:
@@ -961,19 +968,28 @@ def localize_bctools(
         {
             "plot_kwargs": {"cont": 0.9},
             "caption": (
-                "COSI BGO ACS all-sky likelihood-ratio localization TS map in "
-                "Galactic coordinates restricted to the 90% containment TS range. "
-                "Pixel colors encode the localization test statistic and the red "
-                "marker identifies the best-fit transient position."
+                "HEALPix likelihood-ratio test-statistic map for GRB localization "
+                "in Galactic coordinates. At each sky position, the counts measured "
+                "in the six COSI BGO ACS panel groups are compared with the estimated "
+                "background and with the direction-dependent GRB count pattern, while "
+                "optimizing the source normalization. The map corresponds to the "
+                "spectral-response template with the highest maximum TS. Colors encode "
+                "TS values and the red marker identifies the maximum-TS, best-fit GRB "
+                "direction. The displayed TS range corresponds to the 90% localization "
+                "confidence region."
             ),
             "plot_name": (
-                "BGO panel-pattern localization skymap — 90% confidence level"
+                "Likelihood-ratio test-statistic map for COSI BGO ACS GRB localization"
             ),
             "preview_title": (
-                "BGO ACS localization TS map — 90% confidence level"
+                "COSI BGO ACS GRB localization test-statistic map"
             ),
-            "containment_display": "90% TS range",
-            "filename": "bgo_localization_tsmap.png",
+            "containment_display": (
+                "TS range associated with the 90% localization confidence region"
+            ),
+            "filename": (
+                "bgo_acs_grb_localization_tsmap_90pct_confidence_region.png"
+            ),
         },
         {
             # TSMap.plot defaults to cont=0.9.  Supplying vmin overrides that

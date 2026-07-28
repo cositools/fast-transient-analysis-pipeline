@@ -40,7 +40,7 @@ GED_ANALYSIS_DEFAULTS: dict[str, Any] = {
         "map_scheme": "nested",
         "coordsys": "galactic",
         "fast_plot_name": "tsmap_fast.png",
-        "moc_plot_name": "tsmap_moc.png",
+        "moc_plot_name": "ged_multiorder_likelihood_tsmap.png",
         "plot_dpi": 300,
     },
     "binning_data": {
@@ -738,7 +738,9 @@ def compute_ts_map(
     coordsys = str(tsmap_cfg.get("coordsys", "galactic"))
     plot_dpi = int(tsmap_cfg.get("plot_dpi", 300))
     fast_plot_name = str(tsmap_cfg.get("fast_plot_name", "tsmap_fast.png"))
-    moc_plot_name = str(tsmap_cfg.get("moc_plot_name", "tsmap_moc.png"))
+    moc_plot_name = str(
+        tsmap_cfg.get("moc_plot_name", "ged_multiorder_likelihood_tsmap.png")
+    )
     # Get the nside
     nside = int(config.get("tsmap_nside", tsmap_cfg.get("nside", 16)))
     # Get the energy channel
@@ -772,20 +774,23 @@ def compute_ts_map(
     fast_coo = fast_map.pix2skycoord(fast_idx)
     fast_l = float(fast_coo.l.value)
     fast_b = float(fast_coo.b.value)
-    fast_plot_path = plots_dir / fast_plot_name
+    fast_plot_path = plots_dir / "ged_fast_likelihood_tsmap.png"
     trigger_time = _config_trigger_time(config, "GeD")
     fast_caption = (
-        "COSI GeD fixed-resolution HEALPix test-statistic skymap in Galactic "
-        "coordinates using a Mollweide projection. Pixel colors encode the test "
-        "statistic (TS); larger values indicate positions more consistent with a "
-        "transient source. The fuchsia cross marks the maximum-TS position."
+        "Mollweide projection of the fixed-resolution likelihood-ratio test "
+        "statistic in Galactic coordinates. At each HEALPix position, the "
+        "source-plus-background model is evaluated using the detector response, "
+        "spacecraft orientation, background model, selected energy channels, "
+        "and assumed source spectrum. Pixel colors encode TS values, and the "
+        "fuchsia cross marks the maximum-TS direction. TS values are not "
+        "displayed as Gaussian significances."
     )
     fast_title, fast_metadata = _plot_identity(
         "GeD",
         fast_caption,
         trigger_time,
-        f"Fixed-resolution TS skymap (NSIDE={nside})",
-        preview_title="GeD TS Map",
+        f"Fixed-resolution likelihood-ratio TS map (NSIDE={nside})",
+        preview_title="COSI GeD fixed-resolution TS map",
     )
     fig_fast = plt.figure(figsize=(10, 6), dpi=plot_dpi)
     hp.mollview(
@@ -845,17 +850,22 @@ def compute_ts_map(
     moc_b = float(moc_coo.b.value)
     moc_plot_path = plots_dir / moc_plot_name
     moc_caption = (
-        "COSI GeD Multi-Resolution coverage test-statistic skymap in Galactic "
-        "coordinates using a Mollweide projection. Pixel colors encode the test "
-        "statistic (TS), while grey boundaries show the adaptive HEALPix cells. "
-        "The red cross marks the maximum-TS cell."
+        "Multi-order likelihood-ratio test-statistic map in Galactic "
+        "coordinates. Pixel colors encode TS values, while the grey boundaries "
+        "show the HEALPix cells at their respective spatial orders. The map is "
+        "computed using the detector response, spacecraft orientation, "
+        "background model, selected energy channels, and assumed source "
+        "spectrum. The red cross marks the maximum-TS cell."
     )
     moc_title, moc_metadata = _plot_identity(
         "GeD",
         moc_caption,
         trigger_time,
-        f"Multi-resolution TS skymap (maximum cell NSIDE={moc_nside})",
-        preview_title="GeD TS Map",
+        (
+            "Multi-order likelihood-ratio TS map "
+            f"(maximum-TS cell NSIDE={moc_nside})"
+        ),
+        preview_title="COSI GeD multi-order TS map",
     )
     moc_plot_map = HealpixMap(data=moc_ts, uniq=moc_uniq)
     fig_moc = plt.figure(figsize=(10, 6), dpi=plot_dpi)
@@ -985,6 +995,7 @@ def light_curve(
     
     lightcurve_cfg = dict(config["light_curve"])
     lightcurve_nside = int(lightcurve_cfg["nside"])
+    containment = float(lightcurve_cfg.get("containment", 0.5))
 
     def _create_psr(l_deg: float, b_deg: float, ori_file: str, rsp_file: str, nside: int) -> np.ndarray:
         """
@@ -1073,7 +1084,7 @@ def light_curve(
     # Create the mask map
     mask_map = _mask_from_cumdist_vectorized(
         input_psr,
-        containment=float(lightcurve_cfg.get("containment", 0.5)),
+        containment=containment,
     )
     
     counts = []
@@ -1099,18 +1110,19 @@ def light_curve(
     bins = np.arange(tstart - eps_preburst, tstop + eps_postburst + bin_size, bin_size)
 
     lightcurve_caption = (
-        "COSI GeD light curve extracted around the selected TS-map position. "
-        f"The blue step histogram gives the counts in {bin_size:g} s bins after "
-        f"applying the {float(lightcurve_cfg.get('containment', 0.5)):.0%} "
-        "point-source-response containment mask. The orange dashed line marks "
-        "the configured trigger-window start."
+        f"Blue step histogram of the counts in {bin_size:g} s bins after "
+        "selecting Compton-data-space bins from the point-source response "
+        "evaluated at the selected TS-map direction, using a nominal "
+        f"{containment:.0%} response-containment threshold. No background "
+        "subtraction is applied. The orange dashed line marks the configured "
+        "start of the burst interval."
     )
     lightcurve_title, lightcurve_metadata = _plot_identity(
         "GeD",
         lightcurve_caption,
         _config_trigger_time(config, "GeD"),
-        "Point-source-response selected light curve",
-        preview_title="GeD Light Curve",
+        "Point-source-response-selected count light curve",
+        preview_title="COSI GeD response-selected light curve",
     )
     fig_lc, ax_lc = plt.subplots(figsize=tuple(lightcurve_cfg.get("plot_figsize", [10, 4])))
     ax_lc.step(
@@ -1133,7 +1145,9 @@ def light_curve(
     ax_lc.legend()
     ax_lc.grid(True, alpha=0.3)
 
-    lightcurve_plot_path = plots_dir / "lightcurve.png"
+    lightcurve_plot_path = (
+        plots_dir / "ged_point_source_response_selected_lightcurve.png"
+    )
     fig_lc.tight_layout()
     fig_lc.savefig(
         lightcurve_plot_path,
@@ -1150,7 +1164,7 @@ def light_curve(
         "time_centers": time_centers,
         "counts": counts,
         "used_coordinates": {"l_deg": lon, "b_deg": lat},
-        "containment": float(lightcurve_cfg.get("containment", 0.5)),
+        "containment": containment,
         "source_data_path": source_data_path,
         "background_data_path": background_data_path,
         "using_prepared_aggregate": using_prepared_aggregate,
@@ -1278,7 +1292,9 @@ def duration(config_path: str) -> str:
             bb_lc,
             tstart,
             tstop,
-            save_path=str(plots_dir / "lc_analysis.png"),
+            save_path=str(
+                plots_dir / "ged_bayesian_blocks_lightcurve_analysis.png"
+            ),
             figsize=duration_cfg.get("plot_figsize", [10, 4]),
             dpi=int(duration_cfg.get("plot_dpi", 150)),
             trigger_time=_config_trigger_time(config, "GeD"),
@@ -1302,7 +1318,7 @@ def duration(config_path: str) -> str:
         "t90_err_low": float(t90_err_low),
         "t90_err_high": float(t90_err_high),
         "plot_path": (
-            str(plots_dir / "lc_analysis.png")
+            str(plots_dir / "ged_bayesian_blocks_lightcurve_analysis.png")
             if bb_lc is not None and lc_sel is not None
             else None
         ),
@@ -1539,18 +1555,17 @@ def plot_duration(
     import numpy as np
 
     caption = (
-        "COSI GeD light-curve duration analysis. Grey points with error bars "
-        "show the measured count rate, the red dotted curve is the fitted "
-        "background, and the blue step curve is the Bayesian-blocks model. "
-        "Olive dashed vertical lines delimit the inferred signal interval used "
-        "for the duration estimate."
+        "Grey points with horizontal and vertical error bars show the observed "
+        "count rate, the red dotted curve the fitted background rate, and the "
+        "blue step curve the Bayesian-block model. Olive dashed vertical lines "
+        "delimit the signal interval identified by the Bayesian-block analysis."
     )
     title, metadata = _plot_identity(
         "GeD",
         caption,
         trigger_time,
-        "Bayesian-blocks light-curve analysis",
-        preview_title="GeD Light Curve",
+        "Bayesian-block analysis of the GeD light curve",
+        preview_title="COSI GeD Bayesian-block light-curve analysis",
     )
     fig, ax = plt.subplots(figsize=tuple(figsize))
     ax.plot(

@@ -66,7 +66,7 @@ def build_custom(dag):
         "localization_bctools": {
             "nside": 64,
             "counts_order": ["BGO_X0", "BGO_X1", "BGO_Y0", "BGO_Y1", "BGO_Z0", "BGO_Z1"],
-            "output_plot_name": "bgo_localization.png",
+            "output_plot_name": "bgo_acs_grb_localization_tsmap_90cl.png",
         },
     }
     # ==============================================
