@@ -899,7 +899,7 @@ def compute_ts_map(
         moc_l,
         moc_b,
         "x",
-        size=8,
+        size=16,
         horizontalalignment="center",
         verticalalignment="center",
         transform=moc_ax.get_transform("world"),

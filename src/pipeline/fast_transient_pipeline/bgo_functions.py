@@ -1044,7 +1044,8 @@ def localize_bctools(
             best_loc.b.to(u.deg).value,
             color="red",
             transform=ax.get_transform("world"),
-            s=2,
+            marker="x",
+            s=64,
             label="Best localization",
         )
         localization_title, localization_metadata = _plot_identity(
