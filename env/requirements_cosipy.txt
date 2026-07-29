@@ -1,5 +1,5 @@
-# Runtime: Python 3.11
-# Python 3.11 is recommended for compatibility with the current scientific stack.
+# Runtime: Python 3.12 (as declared in fta-pipe.config.yaml)
+# Revalidate these constraints before changing the managed Python version.
 # Rebuild the environment from scratch; do not install over the old environment.
 
 # Packaging compatibility: pkg_resources is still required by legacy dependencies.

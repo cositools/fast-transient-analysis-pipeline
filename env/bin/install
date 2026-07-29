@@ -10,13 +10,12 @@
 # want to change the path, you can modify the COSI_PATH argument for running the script from a different path.
 #
 # The script will:
-# 1. Download the cosiflow repository
-# 2. Modify permissions in the compose file
-# 3. Modify the Dockerfile for the fast-transient-analysis-pipeline repository
-# 4. Build the cosiflow environment, with the containers stack
-# 5. Start the cosiflow environment, with the containers stack running
-# 6. Run the hot_load_module.sh script for preparing the fast-transient-analysis-pipeline module in 
-#    the cosiflow environment in python virtual environment mode
+# 1. Download the cosiflow repository when needed
+# 2. Configure non-secret Compose values and store secrets in env/.env
+# 3. Align container UID/GID values with the host
+# 4. Pre-create bind-mount directories
+# 5. Build and start the cosiflow container stack
+# 6. Install the fast-transient-analysis-pipeline module using its configured mode
 
 # default path for the cosiflow and fast-transient-analysis-pipeline repositories, change if argument
 # long argument --cosi-path is provided, or short argument -c is provided:
@@ -53,7 +52,6 @@ run_sed() {
 # input_mode can be "text" or "secret".
 map_compose_variables() {
     cat <<'EOF'
-AIRFLOW_ADMIN_PASSWORD|cosipass|Enter the password for the Airflow Web UI|^  AIRFLOW_ADMIN_PASSWORD: \${AIRFLOW_ADMIN_PASSWORD:-[^}]*}|  AIRFLOW_ADMIN_PASSWORD: \${AIRFLOW_ADMIN_PASSWORD:-__VALUE__}|secret
 HOST_IP|127.0.0.1|Enter the host IP used for published services|^x-host-ip: &host-ip "[^"]*"|x-host-ip: &host-ip "__VALUE__"|text
 AIRFLOW_ADMIN_USERNAME|admin|Enter the Airflow admin username|^  AIRFLOW_ADMIN_USERNAME: \${AIRFLOW_ADMIN_USERNAME:-[^}]*}|  AIRFLOW_ADMIN_USERNAME: \${AIRFLOW_ADMIN_USERNAME:-__VALUE__}|text
 AIRFLOW_ADMIN_EMAIL|admin@localhost|Enter the Airflow admin email|^  AIRFLOW_ADMIN_EMAIL: \${AIRFLOW_ADMIN_EMAIL:-[^}]*}|  AIRFLOW_ADMIN_EMAIL: \${AIRFLOW_ADMIN_EMAIL:-__VALUE__}|text
@@ -61,14 +59,20 @@ MAILHOG_WEBUI_PORT|8025|Enter the MailHog Web UI port|^  MAILHOG_WEBUI_PORT: \${
 AIRFLOW_WEBUI_PORT|8080|Enter the Airflow Web UI port|^  AIRFLOW_WEBUI_PORT: \${AIRFLOW_WEBUI_PORT:-[^}]*}|  AIRFLOW_WEBUI_PORT: \${AIRFLOW_WEBUI_PORT:-__VALUE__}|text
 POSTGRES_USER|airflow_user|Enter the Postgres username|^  POSTGRES_USER: \${POSTGRES_USER:-[^}]*}|  POSTGRES_USER: \${POSTGRES_USER:-__VALUE__}|text
 POSTGRES_DB|airflow_db|Enter the Postgres database name|^  POSTGRES_DB: \${POSTGRES_DB:-[^}]*}|  POSTGRES_DB: \${POSTGRES_DB:-__VALUE__}|text
-POSTGRES_PASSWORD|secure_password|Enter the Postgres password|^  POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-[^}]*}|  POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-__VALUE__}|secret
 GCN_MYSQL_HOST_PORT|3307|Enter the host port for the GCN MySQL service|^x-gcn-mysql-host-port: &gcn-mysql-host-port [0-9][0-9]*|x-gcn-mysql-host-port: &gcn-mysql-host-port __VALUE__|text
 GCN_DB_NAME|gcn|Enter the GCN MySQL database name|^  GCN_DB_NAME: \${GCN_DB_NAME:-[^}]*}|  GCN_DB_NAME: \${GCN_DB_NAME:-__VALUE__}|text
 GCN_DB_USER|gcn_user|Enter the GCN MySQL username|^  GCN_DB_USER: \${GCN_DB_USER:-[^}]*}|  GCN_DB_USER: \${GCN_DB_USER:-__VALUE__}|text
-GCN_DB_PASSWORD|gcn_password|Enter the GCN MySQL password|^  GCN_DB_PASSWORD: \${GCN_DB_PASSWORD:-[^}]*}|  GCN_DB_PASSWORD: \${GCN_DB_PASSWORD:-__VALUE__}|secret
-GCN_MYSQL_ROOT_PASSWORD|gcn_root_password|Enter the GCN MySQL root password|^      MYSQL_ROOT_PASSWORD: \${GCN_MYSQL_ROOT_PASSWORD:-[^}]*}|      MYSQL_ROOT_PASSWORD: \${GCN_MYSQL_ROOT_PASSWORD:-__VALUE__}|secret
-GCN_CLIENT_ID||Enter the GCN Kafka client ID (leave empty to disable authenticated access)|^  GCN_CLIENT_ID: \${GCN_CLIENT_ID:-[^}]*}|  GCN_CLIENT_ID: \${GCN_CLIENT_ID:-__VALUE__}|text
-GCN_CLIENT_SECRET||Enter the GCN Kafka client secret (leave empty if not configured)|^  GCN_CLIENT_SECRET: \${GCN_CLIENT_SECRET:-[^}]*}|  GCN_CLIENT_SECRET: \${GCN_CLIENT_SECRET:-__VALUE__}|secret
+EOF
+}
+
+map_env_variables() {
+    cat <<'EOF'
+AIRFLOW_ADMIN_PASSWORD|cosipass|Enter the password for the Airflow Web UI|secret
+POSTGRES_PASSWORD|secure_password|Enter the Postgres password|secret
+GCN_DB_PASSWORD|gcn_password|Enter the GCN MySQL password|secret
+GCN_MYSQL_ROOT_PASSWORD|gcn_root_password|Enter the GCN MySQL root password|secret
+GCN_CLIENT_ID||Enter the GCN Kafka client ID (leave empty to disable authenticated access)|text
+GCN_CLIENT_SECRET||Enter the GCN Kafka client secret (leave empty if not configured)|secret
 EOF
 }
 
@@ -110,6 +114,73 @@ prompt_and_update_compose_var() {
     else
         log "Compose file modified with $name: $value"
     fi
+}
+
+upsert_env_var() {
+    local name="$1"
+    local value="$2"
+    local temp_file
+
+    temp_file="$(mktemp "${TMPDIR:-/tmp}/cosiflow-env.XXXXXX")" ||
+        error "Failed to create a temporary file for .env"
+
+    awk -v key="$name" -v value="$value" '
+        BEGIN { updated = 0 }
+        index($0, key "=") == 1 {
+            print key "=" value
+            updated = 1
+            next
+        }
+        { print }
+        END {
+            if (!updated) {
+                print key "=" value
+            }
+        }
+    ' .env > "$temp_file" || error "Failed to update $name in .env"
+
+    mv "$temp_file" .env || error "Failed to replace .env"
+    chmod 600 .env || error "Failed to restrict .env permissions"
+}
+
+prompt_and_update_env_var() {
+    local name="$1"
+    local default="$2"
+    local prompt="$3"
+    local input_mode="${4:-text}"
+    local value
+
+    if [ "$input_mode" = "secret" ]; then
+        if [ -n "$default" ]; then
+            printf '%s (press Enter to keep the current/default value): ' "$prompt" >/dev/tty
+        else
+            printf '%s (press Enter to leave empty): ' "$prompt" >/dev/tty
+        fi
+        IFS= read -r -s value </dev/tty
+        printf '\n' >/dev/tty
+    else
+        printf '%s (default is %s): ' "$prompt" "${default:-empty}" >/dev/tty
+        IFS= read -r value </dev/tty
+    fi
+    value="${value:-$default}"
+
+    upsert_env_var "$name" "$value"
+    if [ "$input_mode" = "secret" ]; then
+        log ".env updated with $name: [hidden]"
+    else
+        log ".env updated with $name: ${value:-[empty]}"
+    fi
+}
+
+get_env_var() {
+    local name="$1"
+
+    awk -v key="$name" '
+        index($0, key "=") == 1 {
+            print substr($0, length(key) + 2)
+            exit
+        }
+    ' .env
 }
 
 # ==============================================
@@ -186,6 +257,14 @@ while IFS='|' read -r name default prompt pattern replacement_template input_mod
     prompt_and_update_compose_var "$name" "$default" "$prompt" "$pattern" "$replacement_template" "$input_mode"
 done < <(map_compose_variables)
 
+touch .env || error "Failed to create .env"
+chmod 600 .env || error "Failed to restrict .env permissions"
+while IFS='|' read -r name default prompt input_mode; do
+    current_value="$(get_env_var "$name")"
+    effective_default="${current_value:-$default}"
+    prompt_and_update_env_var "$name" "$effective_default" "$prompt" "$input_mode"
+done < <(map_env_variables)
+
 read -p "Press Enter to continue"
 # ==============================================
 # 4. Modify the Dockerfile for the fast-transient-analysis-pipeline repository
@@ -198,9 +277,12 @@ log "Dockerfile modified with user and group ids: $USER_ID:$GROUP_ID"
 # ask to user to press Enter to continue
 read -p "Press Enter to continue"
 # 4.5 Pre-creation of folders avoiding that Docker create them with root permissions
-log "Pre-creating volumes directories to avoid root ownership..."
+log "Pre-creating bind-mount directories to avoid root ownership..."
 mkdir -p "$COSI_PATH/cosiflow/pipeline"
-mkdir -p "$COSI_PATH/cosiflow/data"
+mkdir -p "$COSI_PATH/cosiflow/data/postgres_data"
+mkdir -p "$COSI_PATH/cosiflow/data/gcn_mysql_data"
+mkdir -p "$COSI_PATH/cosiflow/data/heasarc"
+mkdir -p "$COSI_PATH/cosiflow/data/logs"
 mkdir -p "$COSI_PATH/envs"
 # ==============================================
 # 5. Build the cosiflow environment, with the containers stack
@@ -221,8 +303,7 @@ log "Cosiflow environment started"
 # ask to user to press Enter to continue
 read -p "Press Enter to continue"
 # ==============================================
-# 7. Run the hot_load_module.sh script for preparing the fast-transient-analysis-pipeline module in 
-#    the cosiflow environment in python virtual environment mode
+# 7. Run hot_load_module.sh using the mode in fta-pipe.config.yaml
 # ==============================================
 # # Modify the configuration file for the fast-transient-analysis-pipeline module to run in python virtual environment mode
 # run_sed "s/install_mode: [^}]*/install_mode: environment/" "$COSI_PATH/fast-transient-analysis-pipeline/env/fta-pipe.config.yaml" || error "Failed to update install_mode in fta-pipe.config.yaml"
@@ -230,8 +311,7 @@ read -p "Press Enter to continue"
 # log "Configuration file modified with install_mode: environment"
 # # ask to user to press Enter to continue
 # read -p "Press Enter to continue"
-# Run the hot_load_module.sh script for preparing the fast-transient-analysis-pipeline module in 
-#    the cosiflow environment in python virtual environment mode
+# Install the module.
 cd "$COSI_PATH/cosiflow/env" || error "Failed to cd to $COSI_PATH/cosiflow/env"
 ./hot_load_module.sh fast-transient-analysis-pipeline install || error "Failed to run hot_load_module.sh for fast-transient-analysis-pipeline"
 # log the hot_load_module.sh script

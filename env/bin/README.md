@@ -1,122 +1,59 @@
-# Installing the Fast Transient Analysis Pipeline in COSIflow
+# Installing FasTP in COSIflow
 
-This directory contains the all-in-one [`install`](install) script. It can
-bootstrap a COSIflow checkout, configure and start its Docker Compose stack,
-and hot-load the Fast Transient Analysis Pipeline.
+The [`install`](install) script bootstraps a COSIflow checkout, configures its
+Docker Compose stack, and hot-loads the Fast Transient Analysis Pipeline.
 
 ## Prerequisites
 
-Before running the script, install:
-
 - Git;
 - Docker Engine or Docker Desktop with Docker Compose v2;
-- Bash;
-- standard Unix tools (`sed`, `grep`, `id`).
+- Bash and standard Unix tools (`awk`, `grep`, `id`, `mktemp`, `sed`).
 
-Create a workspace and clone the pipeline as a sibling of the future
-`cosiflow` checkout:
+Clone FasTP into a workspace. COSIflow will be cloned beside it if missing:
 
 ```bash
 mkdir -p ~/cosi
 cd ~/cosi
 git clone https://github.com/cositools/fast-transient-analysis-pipeline.git
-```
-
-The script clones COSIflow automatically if `~/cosi/cosiflow` does not yet
-exist.
-
-## Install this pipeline
-
-Run:
-
-```bash
-cd ~/cosi/fast-transient-analysis-pipeline/env/bin
+cd fast-transient-analysis-pipeline/env/bin
 ./install
 ```
 
-For a different workspace:
+For another workspace or COSIflow ref:
 
 ```bash
-./install --cosi-path /absolute/path/to/cosi
+./install --cosi-path /absolute/path/to/cosi --cosiflow-ref dev
 ```
 
-The installer:
-
-1. clones COSIflow and checks out the selected ref;
-2. updates UID/GID values so bind-mounted files remain owned by the host user;
-3. prompts for Airflow, PostgreSQL, GCN MySQL, and GCN Kafka settings;
-4. builds and starts the COSIflow Docker Compose stack;
-5. runs `hot_load_module.sh fast-transient-analysis-pipeline install`.
-
-The module layout expected by COSIflow is:
-
-```text
-fast-transient-analysis-pipeline/
-├── env/
-│   ├── Dockerfile
-│   ├── fta-pipe.config.yaml
-│   └── requirements_*.txt
-└── src/
-    ├── dags/
-    └── pipeline/
-```
-
-`fta-pipe.config.yaml` selects the installation mode, source paths, and Python
-environments. Review it before installation, especially:
-
-- `install_mode`: `container`, `environment`, `both`, or `none`;
-- `paths.dags`, `paths.pipeline`, and `paths.images`;
-- each environment's requirements file, Python version, and container
-  `venv_path`.
-
-To install another pipeline of your own, give it the same basic structure,
-create a `*.config.yaml`, place its directory beside `cosiflow`, and run:
+Short options are also available:
 
 ```bash
-cd ~/cosi/cosiflow/env
-./hot_load_module.sh <your-module-directory> install
+./install -c /absolute/path/to/cosi -r <branch-tag-or-commit>
 ```
 
-Use `update` after changing its requirements or runtime configuration and
-`remove` to unload it. See
-[`cosiflow/env/README.md`](../../../cosiflow/env/README.md) for the complete
-module format and lifecycle.
+Run `./install --help` for the complete option list.
 
-## Select a COSIflow version
+## What the installer changes
 
-The installer defaults to the value assigned near line 118:
+The script:
 
-```bash
-COSIFLOW_REF="${COSIFLOW_REF:-dev}"
-```
+1. clones COSIflow when `<COSI_PATH>/cosiflow` is absent and checks out the
+   selected ref;
+2. updates non-secret Compose settings, including UID/GID, host IP, and exposed
+   ports;
+3. creates or updates `cosiflow/env/.env` with Airflow, PostgreSQL, GCN MySQL,
+   and GCN Kafka credentials and sets its mode to `0600`;
+4. creates the required bind-mount directories;
+5. builds and starts COSIflow;
+6. runs `hot_load_module.sh fast-transient-analysis-pipeline install`.
 
-`COSIFLOW_REF` may be a branch, release tag, or commit that Git can check out.
-The preferred way to select it without modifying the script is:
+Personal credentials are deliberately kept out of the tracked
+`docker-compose.yaml`. Existing `.env` values are shown only as masked values
+and secret prompts do not echo their input.
 
-```bash
-./install --cosiflow-ref <branch-tag-or-commit>
-```
-
-The short option and environment-variable forms are equivalent:
-
-```bash
-./install -r <branch-tag-or-commit>
-COSIFLOW_REF=<branch-tag-or-commit> ./install
-```
-
-If this installer is being distributed as a version-specific bootstrap
-script, change the default on that line, for example:
-
-```bash
-COSIFLOW_REF="${COSIFLOW_REF:-vX.Y.Z}"
-```
-
-Use a real COSIflow tag, branch, or full commit hash in place of `vX.Y.Z`. A
-release tag or commit is more reproducible than a moving branch.
-
-The script performs the checkout only when it creates a new
-`<COSI_PATH>/cosiflow` clone. If that directory already exists, select the
-required ref in that checkout before running the installer:
+The installer updates an existing COSIflow checkout in place; it does not
+switch that checkout to `--cosiflow-ref`. If a specific ref is required,
+review local changes and switch it yourself before running the installer:
 
 ```bash
 cd ~/cosi/cosiflow
@@ -124,53 +61,50 @@ git fetch --tags origin
 git checkout <branch-tag-or-commit>
 ```
 
-Review local changes before switching refs; do not overwrite an existing dirty
-working tree.
+A release tag or commit is more reproducible than the default moving `dev`
+branch.
 
-## GCN Kafka credentials for integration tests
+## Module configuration
 
-The Fast Transient Analysis Pipeline reads received alerts from the prototype
-MySQL inbox and queues COSI alerts in its outbox. To test the live Kafka
-receiver, create this file in the COSIflow Compose directory:
+Review [`fta-pipe.config.yaml`](../fta-pipe.config.yaml) before installation.
+It controls:
 
-```text
-cosiflow/env/.env
+- `install_mode`: `container`, `environment`, `both`, or `none`;
+- source paths for DAGs, pipeline code, and images;
+- Python versions, requirements files, and container virtual-environment
+  paths.
+
+The current module uses `install_mode: both`: the loader builds the module
+image and creates the `cosipy`, `bct`, and `nimcosipy` environments.
+
+Use the COSIflow module loader after subsequent changes:
+
+```bash
+cd ~/cosi/cosiflow/env
+./hot_load_module.sh fast-transient-analysis-pipeline update
+./hot_load_module.sh fast-transient-analysis-pipeline remove
 ```
 
-Its complete credential-only content is:
+See the complete
+[`cosiflow/env` module guide](../../../cosiflow/env/README.md) for configuration
+discovery, install modes, lifecycle behavior, and troubleshooting.
+
+## Credentials and GCN safety
+
+The installer manages these values in `cosiflow/env/.env`:
 
 ```dotenv
+AIRFLOW_ADMIN_PASSWORD=<local-password>
+POSTGRES_PASSWORD=<local-password>
+GCN_DB_PASSWORD=<local-password>
+GCN_MYSQL_ROOT_PASSWORD=<local-password>
 GCN_CLIENT_ID=<your-gcn-client-id>
 GCN_CLIENT_SECRET=<your-gcn-client-secret>
 ```
 
-Replace the placeholders with credentials issued to you. Never copy someone
-else's credentials, commit `.env`, paste its contents into issues, or include
-the secret in terminal screenshots. Restrict local access if needed:
-
-```bash
-chmod 600 ~/cosi/cosiflow/env/.env
-```
-
-To obtain credentials:
-
-1. open [gcn.nasa.gov](https://gcn.nasa.gov/);
-2. find the **GCN Kafka** card and click **Get Started**;
-3. sign in or create an account;
-4. create or select a client credential; use the public-consumer scope for
-   receiving public GCN notices;
-5. select the notice formats/topics needed by the test and generate the sample
-   code;
-6. copy only the generated client ID and secret into the local `.env` file.
-
-The official [Kafka client setup guide](https://gcn.nasa.gov/docs/client)
-explains the generated consumer configuration. Credentials allowed to publish
-mission notices require separate coordination with the GCN team and the
-mission-producer scope; public-consumer credentials are not sufficient for
-real COSI publication.
-
-After creating or changing `.env`, recreate the GCN client so Docker Compose
-loads the new values:
+You may edit that ignored file manually instead. Never commit it, paste it into
+issues, or share terminal output containing secrets. After changing GCN
+credentials, recreate the client:
 
 ```bash
 cd ~/cosi/cosiflow/env
@@ -178,10 +112,19 @@ docker compose up -d --force-recreate gcn-client
 docker compose logs -f gcn-client
 ```
 
-Keep the prototype producer defaults in place for ordinary integration tests:
-`GCN_PRODUCER_ENABLED=false`, `GCN_DRY_RUN=true`, and test topics only. The
-outbox will be exercised without publishing an external notice.
+Credentials can be created through the official
+[GCN Kafka client guide](https://gcn.nasa.gov/docs/client). Public-consumer
+credentials can receive public notices; publishing mission notices requires
+separate producer authorization.
 
-For inbox/outbox queries and a sample COSI alert, see the
-[GCN integration section](../../README.md#gcn-client-integration) and
-[`cosiflow/gcn-client/README.md`](../../../cosiflow/gcn-client/README.md).
+For normal integration tests, keep:
+
+```dotenv
+GCN_PRODUCER_ENABLED=false
+GCN_DRY_RUN=true
+```
+
+This exercises the local inbox/outbox without sending an external notice. See
+the repository [GCN integration guide](../../README.md#gcn-integration)
+and COSIflow's
+[`gcn-client` guide](../../../cosiflow/gcn-client/README.md).

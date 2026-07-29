@@ -1,9 +1,9 @@
 # requirements_nimcosipy.txt
 # Runtime: Python 3.12
 #
-# Environment for BGO non-imaging localization tasks. It combines the COSIpy
-# runtime, bc-tools localization dependencies, and the local cosipy.nonimaging
-# checkout mounted inside the Airflow container.
+# Environment for BGO non-imaging localization tasks. It combines the shared
+# scientific stack, bc-tools localization dependencies, and the pinned
+# cosipy.nonimaging package from the official cositools repository.
 
 # Packaging compatibility: legacy dependencies still import pkg_resources.
 setuptools==80.9.0
