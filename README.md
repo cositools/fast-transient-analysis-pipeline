@@ -6,6 +6,106 @@ analysis of transient events observed by the
 DAG and three filesystem-driven scientific branches for BGO, binned GeD, and
 unbinned ARM-selection analysis.
 
+## Quick start
+
+Follow these steps in order for a first local run. Additional configuration and
+architecture details are documented after this section.
+
+### 1. Install
+
+Install Git, Bash, Docker Engine or Docker Desktop, and Docker Compose v2, then
+run the bundled installer:
+
+```bash
+mkdir -p ~/cosi
+cd ~/cosi
+git clone https://github.com/cositools/fast-transient-analysis-pipeline.git
+cd fast-transient-analysis-pipeline/env/bin
+./install
+```
+
+The installer prompts for the local configuration, clones COSIflow beside this
+repository when necessary, builds the required environments, starts the
+services, and loads the FasTP module. Let it finish before continuing.
+
+### 2. Open the web interfaces
+
+With the default ports, open:
+
+- Airflow: [http://localhost:8080/home](http://localhost:8080/home)
+- MailHog: [http://localhost:8025](http://localhost:8025)
+
+Sign in to Airflow with the administrator credentials selected during
+installation. The DAG list should contain `init_pipelines`, `cosidag_BGO`,
+`cosidag_GeD`, and `cosidag_ARMselection`.
+
+If the DAGs do not appear, use **Develop Tools → Refresh DAGs List** or run:
+
+```bash
+cd ~/cosi/cosiflow/env
+docker compose exec airflow airflow dags list
+```
+
+### 3. Start a pipeline
+
+The scientific COSIDAGs watch for a `products/` directory created by
+`init_pipelines`. Unpause only the branch or branches required for the run, then
+trigger `init_pipelines` from Airflow.
+
+For a GeD run:
+
+1. pause `cosidag_BGO`;
+2. unpause `cosidag_GeD`, `cosidag_ARMselection`, or both;
+3. trigger `init_pipelines` with `pipeline_branch=GeD` and
+   `destination=tdrss`;
+4. leave the input paths at `__default__` for the standard test data.
+
+For a BGO run:
+
+1. pause `cosidag_GeD` and `cosidag_ARMselection`;
+2. unpause `cosidag_BGO`;
+3. trigger `init_pipelines` with `pipeline_branch=BGO`;
+4. leave the five BGO input paths at `__default__` for the standard run17
+   data.
+
+Monitor `init_pipelines` until staging completes. Each unpaused COSIDAG then
+discovers the new directory and starts its scientific tasks automatically.
+
+### 4. Stop or restart
+
+Run the lifecycle commands from the COSIflow Compose directory:
+
+```bash
+cd ~/cosi/cosiflow/env
+
+# Stop all services while preserving their containers and data
+docker compose stop
+
+# Start the stopped services again
+docker compose start
+```
+
+To restart running services without stopping them manually:
+
+```bash
+docker compose restart
+```
+
+To remove the Compose stack and its named volumes, then recreate it:
+
+```bash
+# Stop and remove containers, networks, and named volumes
+docker compose down -v
+
+# Recreate and start the services in the background
+docker compose up -d
+```
+
+`stop`, `start`, and `restart` preserve containers, generated scientific data,
+and database volumes. `docker compose down -v` is a destructive reset: it
+removes named volumes and their database state. Bind-mounted scientific data is
+not removed.
+
 ## Current DAGs
 
 | DAG ID | Runtime | Role |
@@ -76,33 +176,13 @@ also requires pinning every VCS dependency and base-image digest. The current
 COSIpy and bc-tools requirements still follow development branches; review and
 pin them before producing a release image.
 
-## Installation
+## Installation details
 
-### Prerequisites
-
-Install Git, Bash, Docker Engine or Docker Desktop, and Docker Compose v2.
-
-Clone this repository into a workspace:
-
-```bash
-mkdir -p ~/cosi
-cd ~/cosi
-git clone https://github.com/cositools/fast-transient-analysis-pipeline.git
-```
-
-### All-in-one bootstrap
-
-The bundled installer clones COSIflow when necessary, configures it, starts the
-Compose stack, and hot-loads this module:
+The quick-start command uses the all-in-one bootstrap. To select another
+workspace or COSIflow ref, run:
 
 ```bash
 cd ~/cosi/fast-transient-analysis-pipeline/env/bin
-./install
-```
-
-Use another workspace or COSIflow ref with:
-
-```bash
 ./install --cosi-path /absolute/path/to/cosi \
   --cosiflow-ref <branch-tag-or-commit>
 ```
@@ -236,24 +316,10 @@ mission-producer credentials have been approved.
 Full GCN client architecture and SQL examples are documented in
 [`../cosiflow/gcn-client/README.md`](../cosiflow/gcn-client/README.md).
 
-## After installation
-
-With default endpoint values:
-
-- Airflow: `http://localhost:8080/home`
-- MailHog: `http://localhost:8025`
+## Module lifecycle
 
 Custom host ports configured by the installer are applied to the Docker
 published ports and to the displayed URLs.
-
-If DAGs do not appear:
-
-```bash
-cd ~/cosi/cosiflow/env
-docker compose exec airflow airflow dags list
-```
-
-or use **Develop Tools → Refresh DAGs List** in Airflow.
 
 Update or remove the module with:
 
