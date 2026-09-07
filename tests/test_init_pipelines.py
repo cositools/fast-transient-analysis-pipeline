@@ -189,21 +189,19 @@ class GenericStagingTests(unittest.TestCase):
 
 
 class BranchAndContractTests(unittest.TestCase):
-    def test_docker_tasks_mount_the_airflow_heasarc_data_root(self):
+    def test_pipeline_tasks_run_without_docker_daemon_access(self):
         dag_source = (
             REPO_ROOT / "src" / "dags" / "cosipipe_initpipeline.py"
         ).read_text()
 
-        self.assertIn('"HOST_DATA_PATH"', dag_source)
-        self.assertEqual(
-            dag_source.count(
-                'Mount(source=HOST_DATA_PATH, target="/home/gamma/workspace/data"'
-            ),
-            2,
-        )
-        self.assertNotIn(
-            'Mount(source=f"{HOST_WORKSPACE_PATH}/cosiflow/data"', dag_source
-        )
+        self.assertNotIn("DockerOperator", dag_source)
+        self.assertNotIn("docker.types", dag_source)
+        self.assertNotIn("docker_url", dag_source)
+        self.assertNotIn("HOST_DATA_PATH", dag_source)
+        self.assertEqual(dag_source.count("BashOperator("), 2)
+        self.assertIn('COSIPY_PYTHON = os.getenv(', dag_source)
+        self.assertIn('"$COSIPY_PYTHON" "$STAGE_SCRIPT"', dag_source)
+        self.assertIn('"$COSIPY_PYTHON" "$BKG_CUT_SCRIPT"', dag_source)
 
     def test_bgo_bypasses_background_cut(self):
         self.assertEqual(

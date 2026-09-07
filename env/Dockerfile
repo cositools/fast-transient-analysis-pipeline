@@ -23,8 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ------------------------------ Non-root user ------------------------------
-ARG UID=
-ARG GID=
+ARG UID=501
+ARG GID=20
 
 # Create group and user with specific UID/GID
 RUN groupadd -g "${GID}" gamma || true && \

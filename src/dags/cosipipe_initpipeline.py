@@ -1,7 +1,7 @@
 # dags/init_pipelines.py
 # Airflow 2.x — Initialize and stage COSI pipeline data
 # - staged raw subfolders (source/background/orientation/response)
-# - staging & background cut executed in Docker Container via DockerOperator
+# - staging & background cut executed in the managed COSIpy environment
 # - run folder under DEST_MAP/YYYY_MM/YYMMDDXXX/products with symlinks and cut result
 
 from __future__ import annotations
@@ -22,11 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from airflow import DAG
 from airflow.models.param import Param
 from airflow.operators.empty import EmptyOperator
+from airflow.operators.bash import BashOperator
 from airflow.operators.python import BranchPythonOperator, PythonOperator
-from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.utils.trigger_rule import TriggerRule
-from docker.types import Mount
-from datetime import timedelta
 
 from init_pipeline_config import (
     AUTO_INPUT,
@@ -42,26 +40,9 @@ from init_pipeline_config import (
 )
 
 # === Config ===
-# The image to use for scientific tasks (cosipy environment)
-# Ideally, this should be configurable via Variable or Env, but hardcoded for now as requested.
-# Using 'fast-transient-analysis-pipeline:latest' assuming it is built locally.
-CONTAINER_IMAGE = "fast-transient-analysis-pipeline:latest"
-
-# Scripts inside the container (mounted via modules_pool in the container, but here we assume the container has them or we mount them)
-# Wait, if we use DockerOperator, we are launching a NEW container. 
-# We need to make sure the code is available inside THAT container.
-# If 'fast-transient-analysis-pipeline' image contains the code in /app or similar, we use that path.
-# Assuming standard structure in image: /home/gamma/airflow/pipeline/... is NOT guaranteed unless we mount it.
-# However, user said "fast-transient-analysis-pipeline" module. 
-# Let's assume the image has the code or we mount the workspace.
-# For robustness, we mount the workspace into the DockerOperator container too.
-
-# We also need the pipeline scripts. Assuming they are in the workspace under fast-transient-analysis-pipeline/src/pipeline
-# and mapped to /home/gamma/airflow/pipeline inside the container for consistency with previous scripts.
-# Or simpler: we execute the script from the mounted workspace directly.
-
-STAGE_SCRIPT = "/home/gamma/workspace/fast-transient-analysis-pipeline/src/pipeline/stage_files.py"
-BKG_CUT_SCRIPT = "/home/gamma/workspace/fast-transient-analysis-pipeline/src/pipeline/bkg_cut.py"
+COSIPY_PYTHON = os.getenv("COSIPY_PYTHON", "/home/gamma/envs/cosipy/bin/python")
+STAGE_SCRIPT = "/home/gamma/airflow/pipeline/stage_files.py"
+BKG_CUT_SCRIPT = "/home/gamma/airflow/pipeline/bkg_cut.py"
 
 def wasabi_keys(base: str, folder: str, file_names: list[str]) -> list[str]:
     return [f"{base}/{folder}/{file_name}" for file_name in file_names]
@@ -374,7 +355,7 @@ with DAG(
     start_date=datetime(2024, 1, 1),
     schedule=None,
     catchup=False,
-    tags=["cosiflow", "init", "docker"],
+    tags=["cosiflow", "init"],
     description="Initialize and stage GeD or BGO COSI pipeline data",
     params={
         "pipeline_branch": Param(
@@ -489,50 +470,25 @@ with DAG(
 
     t_resolve = PythonOperator(task_id="resolve_config", python_callable=resolve_config)
 
-    # Use DockerOperator to run the staging script
-    # We mount the host workspace so the container can write to data/raw
-    # NOTE: 'mounts' requires the absolute path on the HOST machine.
-    # Since we are inside Airflow, we can't easily know the host path unless passed as env var.
-    # HOWEVER, if we share the same volume mounts as the airflow container, we can use 'volumes' in DockerOperator
-    # referring to the named volume or host path.
-    #
-    # The workspace path on the host machine
-    # This should match the actual host path where the cosi directory is located
-    HOST_WORKSPACE_PATH = os.getenv("HOST_WORKSPACE_PATH")
-    if not HOST_WORKSPACE_PATH:
-        raise ValueError("HOST_WORKSPACE_PATH is not set. "
-        "Set env var HOST_WORKSPACE_PATH in docker-compose or Airflow Variable COSIDAG_DOCKER_HOST_WORKSPACE_PATH.")
-    # Keep DockerOperator containers on the same host directory mounted as
-    # /home/gamma/workspace/data in the Airflow container.  Cosiflow stores
-    # that archive under data/heasarc; mounting data/ instead makes XCom paths
-    # point at files that do not exist from the child container's perspective.
-    HOST_DATA_PATH = os.getenv(
-        "HOST_DATA_PATH",
-        f"{HOST_WORKSPACE_PATH}/cosiflow/data/heasarc",
-    )
-
     # === 3. Stage all files ===
-    t_stage = DockerOperator(
+    t_stage = BashOperator(
         task_id="stage_all_files",
-        image=CONTAINER_IMAGE,
-        api_version='auto',
-        auto_remove="success", # 'True' is deprecated/invalid in recent provider versions
-        mount_tmp_dir=False,
-        execution_timeout=timedelta(hours=2),
-        # Mount fast-transient-analysis-pipeline code and shared data only
-        mounts=[
-            Mount(source=f"{HOST_WORKSPACE_PATH}/fast-transient-analysis-pipeline", target="/home/gamma/workspace/fast-transient-analysis-pipeline", type="bind"),
-            Mount(source=HOST_DATA_PATH, target="/home/gamma/workspace/data", type="bind"),
-        ],
-        command=[
-            "python", STAGE_SCRIPT,
-            "--inputs", "{{ ti.xcom_pull(task_ids='resolve_config')['inputs'] | tojson }}",
-            "--dirs", "{{ ti.xcom_pull(task_ids='resolve_config')['dirs'] | tojson }}",
-            "--wasabi-base", "{{ ti.xcom_pull(task_ids='resolve_config')['wasabi_base'] }}"
-        ],
-        # docker_url is removed -> Airflow uses DOCKER_HOST env var automatically
-        network_mode="bridge",
-        do_xcom_push=True, # Capture the JSON output from stdout
+        bash_command='''
+set -euo pipefail
+"$COSIPY_PYTHON" "$STAGE_SCRIPT" \
+  --inputs "$STAGE_INPUTS" \
+  --dirs "$STAGE_DIRS" \
+  --wasabi-base "$WASABI_BASE"
+''',
+        env={
+            "COSIPY_PYTHON": COSIPY_PYTHON,
+            "STAGE_SCRIPT": STAGE_SCRIPT,
+            "STAGE_INPUTS": "{{ ti.xcom_pull(task_ids='resolve_config')['inputs'] | tojson }}",
+            "STAGE_DIRS": "{{ ti.xcom_pull(task_ids='resolve_config')['dirs'] | tojson }}",
+            "WASABI_BASE": "{{ ti.xcom_pull(task_ids='resolve_config')['wasabi_base'] }}",
+        },
+        append_env=True,
+        do_xcom_push=True,
     )
 
     # === 4. Create products directory ===
@@ -579,24 +535,20 @@ with DAG(
     )
 
     # GeD-only background cut. BGO branches around this task entirely.
-    t_bkgcut = DockerOperator(
+    t_bkgcut = BashOperator(
         task_id="background_cut",
-        image=CONTAINER_IMAGE,
-        api_version='auto',
-        auto_remove="success",
-        mount_tmp_dir=False,
-        mounts=[
-            Mount(source=f"{HOST_WORKSPACE_PATH}/fast-transient-analysis-pipeline", target="/home/gamma/workspace/fast-transient-analysis-pipeline", type="bind"),
-            Mount(source=HOST_DATA_PATH, target="/home/gamma/workspace/data", type="bind"),
-        ],
-        command=[
-            "python", BKG_CUT_SCRIPT,
-            "{{ ti.xcom_pull(task_ids='create_symlinks')['source'] }}",
-            "{{ ti.xcom_pull(task_ids='create_symlinks')['background'] }}",
-            "--eps_time", "{{ ti.xcom_pull(task_ids='resolve_config')['eps_time'] }}"
-        ],
-        # docker_url is removed -> Airflow uses DOCKER_HOST env var automatically
-        network_mode="bridge",
+        bash_command='''
+set -euo pipefail
+"$COSIPY_PYTHON" "$BKG_CUT_SCRIPT" "$SOURCE_PATH" "$BACKGROUND_PATH" --eps_time "$EPS_TIME"
+''',
+        env={
+            "COSIPY_PYTHON": COSIPY_PYTHON,
+            "BKG_CUT_SCRIPT": BKG_CUT_SCRIPT,
+            "SOURCE_PATH": "{{ ti.xcom_pull(task_ids='create_symlinks')['source'] }}",
+            "BACKGROUND_PATH": "{{ ti.xcom_pull(task_ids='create_symlinks')['background'] }}",
+            "EPS_TIME": "{{ ti.xcom_pull(task_ids='resolve_config')['eps_time'] }}",
+        },
+        append_env=True,
     )
 
     t_bgo_complete = EmptyOperator(task_id="bgo_staging_complete")

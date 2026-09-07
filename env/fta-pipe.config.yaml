@@ -16,7 +16,7 @@
 #   - "environment": Only create Python virtual environments (equivalent to -e flag)
 #   - "both": Build Docker image AND create environments (equivalent to -a flag)
 #   - "none": Skip installation (only link DAGs and pipeline)
-install_mode: both
+install_mode: environment
 
 # ==============================================================================
 # Paths Configuration

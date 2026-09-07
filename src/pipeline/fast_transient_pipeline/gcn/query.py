@@ -116,12 +116,15 @@ def query_relevant_grb_notices(
     params = (_mysql_datetime(query_start), _mysql_datetime(query_stop), limit)
 
     try:
+        db_password = os.getenv("GCN_DB_PASSWORD", "")
+        if not db_password:
+            raise RuntimeError("GCN_DB_PASSWORD is required")
         conn = pymysql.connect(
             host=os.getenv("GCN_DB_HOST", "gcn-mysql"),
             port=int(os.getenv("GCN_DB_PORT", "3306")),
             database=os.getenv("GCN_DB_NAME", "gcn"),
             user=os.getenv("GCN_DB_USER", "gcn_user"),
-            password=os.getenv("GCN_DB_PASSWORD", "gcn_password"),
+            password=db_password,
             charset="utf8mb4",
             cursorclass=pymysql.cursors.DictCursor,
             autocommit=True,

@@ -39,10 +39,10 @@ The script:
 
 1. clones COSIflow when `<COSI_PATH>/cosiflow` is absent and checks out the
    selected ref;
-2. updates non-secret Compose settings, including UID/GID, host IP, and exposed
-   ports;
-3. creates or updates `cosiflow/env/.env` with Airflow, PostgreSQL, GCN MySQL,
-   and GCN Kafka credentials and sets its mode to `0600`;
+2. updates non-secret Compose settings, including UID/GID and loopback ports;
+3. creates or updates `cosiflow/env/.env` with generated Airflow keys,
+   generated database passwords, and required GCN Kafka credentials, then sets
+   its mode to `0600`;
 4. creates the required bind-mount directories;
 5. builds and starts COSIflow;
 6. runs `hot_load_module.sh fast-transient-analysis-pipeline install`.
@@ -74,8 +74,9 @@ It controls:
 - Python versions, requirements files, and container virtual-environment
   paths.
 
-The current module uses `install_mode: both`: the loader builds the module
-image and creates the `cosipy`, `bct`, and `nimcosipy` environments.
+The current module uses `install_mode: environment`: the loader creates the
+`cosipy`, `bct`, and `nimcosipy` environments without giving Airflow access to
+a container runtime.
 
 Use the COSIflow module loader after subsequent changes:
 
@@ -95,6 +96,9 @@ The installer manages these values in `cosiflow/env/.env`:
 
 ```dotenv
 AIRFLOW_ADMIN_PASSWORD=<local-password>
+AIRFLOW__WEBSERVER__SECRET_KEY=<random-key>
+AIRFLOW__CORE__INTERNAL_API_SECRET_KEY=<different-random-key>
+AIRFLOW__CORE__FERNET_KEY=<fernet-key>
 POSTGRES_PASSWORD=<local-password>
 GCN_DB_PASSWORD=<local-password>
 GCN_MYSQL_ROOT_PASSWORD=<local-password>
@@ -103,12 +107,14 @@ GCN_CLIENT_SECRET=<your-gcn-client-secret>
 ```
 
 You may edit that ignored file manually instead. Never commit it, paste it into
-issues, or share terminal output containing secrets. After changing GCN
-credentials, recreate the client:
+issues, or share terminal output containing secrets. The installer rejects
+empty required values and replaces short legacy defaults. After changing GCN
+credentials, revoke the previous client at GCN and recreate the client through
+the audited orchestrator wrapper:
 
 ```bash
 cd ~/cosi/cosiflow/env
-docker compose up -d --force-recreate gcn-client
+./gcn-lifecycle.sh restart
 docker compose logs -f gcn-client
 ```
 

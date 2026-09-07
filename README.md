@@ -110,7 +110,7 @@ not removed.
 
 | DAG ID | Runtime | Role |
 | --- | --- | --- |
-| `init_pipelines` | Airflow Python + module Docker image | Resolve and stage GeD or BGO inputs |
+| `init_pipelines` | Airflow Python + managed COSIpy environment | Resolve and stage GeD or BGO inputs |
 | `cosidag_BGO` | `cosipy`, `bct`, `nimcosipy` | BGO duration, background, light curve, significance, and localization |
 | `cosidag_GeD` | `cosipy`, `bct` | Binned GeD data, TS maps, light curve, and duration |
 | `cosidag_ARMselection` | `cosipy` | Unbinned ARM-gated light curve and HEALPix localization |
@@ -159,8 +159,9 @@ fast-transient-analysis-pipeline/
 
 ## Runtime environments
 
-The checked-in module configuration uses `install_mode: both`: it builds the
-module image and recreates every enabled external Python environment.
+The checked-in module configuration uses `install_mode: environment`: it
+recreates every enabled external Python environment. Staging and background
+cut use the managed COSIpy interpreter and do not give Airflow Docker access.
 
 | Environment | Python | Requirements | Used by |
 | --- | --- | --- | --- |
@@ -168,8 +169,8 @@ module image and recreates every enabled external Python environment.
 | `bct` | 3.11 | `env/requirements_bct.txt` | Bayesian-Blocks duration and BGO time-series work |
 | `nimcosipy` | 3.12 | `env/requirements_nimcosipy.txt` | BGO non-imaging localization |
 
-The Docker image is based on Python 3.12 and installs the COSIpy requirement
-set. It is required by `init_pipelines` staging/background-cut tasks.
+The optional Docker image is based on Python 3.12 and installs the COSIpy
+requirement set, but it is not launched by Airflow.
 
 The runtimes isolate incompatible stacks, but complete build reproducibility
 also requires pinning every VCS dependency and base-image digest. The current
@@ -197,15 +198,14 @@ The installer:
 2. aligns COSIflow and module-image UID/GID values with the host user;
 3. writes non-sensitive host, user, port, and database-name choices into
    `docker-compose.yaml`;
-4. writes passwords and optional GCN credentials into ignored
+4. writes generated passwords, distinct Airflow keys, and required GCN credentials into ignored
    `cosiflow/env/.env` with mode `0600`;
 5. pre-creates bind-mount directories;
 6. builds and starts the COSIflow stack;
 7. runs `hot_load_module.sh fast-transient-analysis-pipeline install`.
 
-Do not commit `.env`. GCN client credentials are optional: without them the
-receiver stays idle, while local inbox injection and dry-run outbox processing
-continue to work.
+Do not commit `.env`. GCN client credentials are mandatory for the enabled
+receiver; incomplete configuration fails before startup.
 
 The detailed bootstrap and credential procedure is in
 [env/bin/README.md](env/bin/README.md).

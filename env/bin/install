@@ -52,14 +52,12 @@ run_sed() {
 # input_mode can be "text" or "secret".
 map_compose_variables() {
     cat <<'EOF'
-HOST_IP|127.0.0.1|Enter the host IP used for published services|^x-host-ip: &host-ip "[^"]*"|x-host-ip: &host-ip "__VALUE__"|text
 AIRFLOW_ADMIN_USERNAME|admin|Enter the Airflow admin username|^  AIRFLOW_ADMIN_USERNAME: \${AIRFLOW_ADMIN_USERNAME:-[^}]*}|  AIRFLOW_ADMIN_USERNAME: \${AIRFLOW_ADMIN_USERNAME:-__VALUE__}|text
 AIRFLOW_ADMIN_EMAIL|admin@localhost|Enter the Airflow admin email|^  AIRFLOW_ADMIN_EMAIL: \${AIRFLOW_ADMIN_EMAIL:-[^}]*}|  AIRFLOW_ADMIN_EMAIL: \${AIRFLOW_ADMIN_EMAIL:-__VALUE__}|text
 MAILHOG_WEBUI_PORT|8025|Enter the MailHog Web UI port|^  MAILHOG_WEBUI_PORT: \${MAILHOG_WEBUI_PORT:-[^}]*}|  MAILHOG_WEBUI_PORT: \${MAILHOG_WEBUI_PORT:-__VALUE__}|text
 AIRFLOW_WEBUI_PORT|8080|Enter the Airflow Web UI port|^  AIRFLOW_WEBUI_PORT: \${AIRFLOW_WEBUI_PORT:-[^}]*}|  AIRFLOW_WEBUI_PORT: \${AIRFLOW_WEBUI_PORT:-__VALUE__}|text
 POSTGRES_USER|airflow_user|Enter the Postgres username|^  POSTGRES_USER: \${POSTGRES_USER:-[^}]*}|  POSTGRES_USER: \${POSTGRES_USER:-__VALUE__}|text
 POSTGRES_DB|airflow_db|Enter the Postgres database name|^  POSTGRES_DB: \${POSTGRES_DB:-[^}]*}|  POSTGRES_DB: \${POSTGRES_DB:-__VALUE__}|text
-GCN_MYSQL_HOST_PORT|3307|Enter the host port for the GCN MySQL service|^x-gcn-mysql-host-port: &gcn-mysql-host-port [0-9][0-9]*|x-gcn-mysql-host-port: &gcn-mysql-host-port __VALUE__|text
 GCN_DB_NAME|gcn|Enter the GCN MySQL database name|^  GCN_DB_NAME: \${GCN_DB_NAME:-[^}]*}|  GCN_DB_NAME: \${GCN_DB_NAME:-__VALUE__}|text
 GCN_DB_USER|gcn_user|Enter the GCN MySQL username|^  GCN_DB_USER: \${GCN_DB_USER:-[^}]*}|  GCN_DB_USER: \${GCN_DB_USER:-__VALUE__}|text
 EOF
@@ -67,13 +65,34 @@ EOF
 
 map_env_variables() {
     cat <<'EOF'
-AIRFLOW_ADMIN_PASSWORD|cosipass|Enter the password for the Airflow Web UI|secret
-POSTGRES_PASSWORD|secure_password|Enter the Postgres password|secret
-GCN_DB_PASSWORD|gcn_password|Enter the GCN MySQL password|secret
-GCN_MYSQL_ROOT_PASSWORD|gcn_root_password|Enter the GCN MySQL root password|secret
-GCN_CLIENT_ID||Enter the GCN Kafka client ID (leave empty to disable authenticated access)|text
-GCN_CLIENT_SECRET||Enter the GCN Kafka client secret (leave empty if not configured)|secret
+AIRFLOW_ADMIN_PASSWORD||Enter the password for the Airflow Web UI|secret|urlsafe
+POSTGRES_PASSWORD||Enter the Postgres password|secret|urlsafe
+GCN_DB_PASSWORD||Enter the GCN MySQL password|secret|urlsafe
+GCN_MYSQL_ROOT_PASSWORD||Enter the GCN MySQL root password|secret|urlsafe
+AIRFLOW__WEBSERVER__SECRET_KEY||Enter the Airflow web signing key|secret|urlsafe
+AIRFLOW__CORE__INTERNAL_API_SECRET_KEY||Enter the Airflow internal API key|secret|urlsafe
+AIRFLOW__CORE__FERNET_KEY||Enter the Airflow Fernet key|secret|fernet
+GCN_CLIENT_ID||Enter the GCN Kafka client ID|text|required
+GCN_CLIENT_SECRET||Enter the GCN Kafka client secret|secret|required
 EOF
+}
+
+generate_secret() {
+    case "$1" in
+        fernet)
+            python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())'
+            ;;
+        urlsafe)
+            python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+            ;;
+        *)
+            printf ''
+            ;;
+    esac
+}
+
+is_revoked_legacy_value() {
+    [ "${#1}" -lt 24 ]
 }
 
 prompt_and_update_compose_var() {
@@ -148,11 +167,12 @@ prompt_and_update_env_var() {
     local default="$2"
     local prompt="$3"
     local input_mode="${4:-text}"
+    local policy="${5:-required}"
     local value
 
     if [ "$input_mode" = "secret" ]; then
         if [ -n "$default" ]; then
-            printf '%s (press Enter to keep the current/default value): ' "$prompt" >/dev/tty
+            printf '%s (press Enter to keep the current/generated value): ' "$prompt" >/dev/tty
         else
             printf '%s (press Enter to leave empty): ' "$prompt" >/dev/tty
         fi
@@ -163,6 +183,7 @@ prompt_and_update_env_var() {
         IFS= read -r value </dev/tty
     fi
     value="${value:-$default}"
+    [ -n "$value" ] || error "$name is required and must not be empty"
 
     upsert_env_var "$name" "$value"
     if [ "$input_mode" = "secret" ]; then
@@ -259,10 +280,14 @@ done < <(map_compose_variables)
 
 touch .env || error "Failed to create .env"
 chmod 600 .env || error "Failed to restrict .env permissions"
-while IFS='|' read -r name default prompt input_mode; do
+while IFS='|' read -r name default prompt input_mode policy; do
     current_value="$(get_env_var "$name")"
-    effective_default="${current_value:-$default}"
-    prompt_and_update_env_var "$name" "$effective_default" "$prompt" "$input_mode"
+    if [ -n "$current_value" ] && ! is_revoked_legacy_value "$current_value"; then
+        effective_default="$current_value"
+    else
+        effective_default="$(generate_secret "$policy")"
+    fi
+    prompt_and_update_env_var "$name" "$effective_default" "$prompt" "$input_mode" "$policy"
 done < <(map_env_variables)
 
 read -p "Press Enter to continue"
