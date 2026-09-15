@@ -1,28 +1,28 @@
 # requirements_bct.txt
 # Runtime: Python 3.11
 
-# bctools usa ancora pkg_resources.
+# bctools still uses pkg_resources.
 setuptools==80.9.0
 
-# Stack scientifico conservativo.
+# Conservative scientific stack.
 numpy>=1.24,<2
 scipy>=1.10,<1.14
 matplotlib>=3.7.1,<3.9
 pandas>=2.0,<2.2
 
-# Usato direttamente dalla pipeline per i file di configurazione.
+# Used directly by the pipeline for configuration files.
 pyyaml
 
-# Usato dai task che interrogano il database GCN inbound.
+# Used by tasks that query the inbound GCN database.
 PyMySQL>=1.1.1
 
-# BCTools installa automaticamente:
+# BCTools installs these dependencies automatically:
 # - scoords
 # - histpy
 # - mhealpy
 # - yayc
-# - il fork BurstCube di astro-gdt
+# - the BurstCube fork of astro-gdt
 #
-# Non aggiungere separatamente astro-gdt da PyPI.
+# Do not add astro-gdt from PyPI separately.
 
 git+https://gitlab.com/burstcube/bc-tools.git@develop

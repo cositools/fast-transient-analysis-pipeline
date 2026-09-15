@@ -1,0 +1,49 @@
+site_name: FasTP Documentation
+site_description: Technical documentation for the Fast Transient Analysis Pipeline
+repo_url: https://github.com/cositools/fast-transient-analysis-pipeline
+repo_name: cositools/fast-transient-analysis-pipeline
+edit_uri: edit/dev/docs/
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - First run: getting-started/first-run.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Data flow: architecture/data-flow.md
+      - Runtime environments: architecture/runtime-environments.md
+  - Reference:
+      - Configuration: reference/configuration.md
+      - DAGs: reference/dags.md
+      - Pipeline code: reference/pipeline-code.md
+  - Pipelines:
+      - BGO: pipelines/bgo.md
+      - GeD: pipelines/ged.md
+      - ARM selection: pipelines/arm-selection.md
+  - Integration:
+      - GCN: integration/gcn.md
+  - Development:
+      - FasTP as an example: development/using-fastp-as-example.md
+      - Testing: development/testing.md

@@ -4,7 +4,6 @@ from pathlib import Path
 import subprocess
 import zipfile
 import tarfile
-from datetime import datetime
 
 # === Setup download paths ===
 data_folder = Path("/home/gamma/workspace/data/raw")
@@ -53,4 +52,3 @@ with tarfile.open(archive_path, "w:gz") as tar:
 
 print(f"Archive created: {archive_path}")
 print(f"Archive size: {archive_path.stat().st_size / (1024*1024):.2f} MB")
-

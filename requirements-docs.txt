@@ -1,0 +1,4 @@
+# Direct documentation dependencies are exact pins. Update them together and
+# verify `python -m mkdocs build --strict` before changing this lock file.
+mkdocs==1.6.1
+mkdocs-material==9.6.14

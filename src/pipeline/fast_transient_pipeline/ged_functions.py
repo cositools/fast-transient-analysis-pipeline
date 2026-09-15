@@ -711,7 +711,6 @@ def compute_ts_map(
 
     import logging
     logging.basicConfig(level = logging.INFO)
-    import gc
     import astropy.units as u
     from astropy.time import Time
     from cosipy import FastTSMap, MOCTSMap, SpacecraftHistory

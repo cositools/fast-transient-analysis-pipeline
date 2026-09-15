@@ -16,6 +16,10 @@ Changes on the development branch after `v0.2.1`.
 
 ### Added
 
+- Added a strict, independently buildable MkDocs site for FasTP installation,
+  architecture, pipeline, configuration, integration, and testing guidance.
+- Added characterization tests for the BGO background-bin error contract and
+  scalar-only localization logging.
 - Added the `cosidag_ARMselection` DAG as a dedicated unbinned GeD
   event-selection and Li & Ma HEALPix-localization branch.
 - Added branch-specific documentation for ARMselection and updated the BGO,
@@ -24,6 +28,11 @@ Changes on the development branch after `v0.2.1`.
 
 ### Changed
 
+- Consolidated technical README content under `docs/`, corrected the documented
+  staging and background-cut runtime, and aligned the scoped operational text
+  with the repository's English-language convention.
+- Replaced the full BGO localization-result dump with a module logger summary
+  containing only scalar Galactic coordinates.
 - Refactored the all-in-one installer for the current COSIflow Compose layout:
 
   - added `-r`/`--cosiflow-ref` alongside `-c`/`--cosi-path` and made `dev` the
@@ -63,6 +72,8 @@ Changes on the development branch after `v0.2.1`.
 
 ### Removed
 
+- Removed unused `pandas`, `gc`, and `datetime` imports from the BGO, GeD, and
+  data-download modules.
 - Removed the superseded Light Curve, TS Map, and standalone Fast GRB COSIDAGs.
   Their maintained behavior is represented by `init_pipelines`, `cosidag_BGO`,
   `cosidag_GeD`, and the new `cosidag_ARMselection` branch.

@@ -1,12 +1,33 @@
 from __future__ import annotations
 
-import pandas as pd
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import os
 import math
 from typing import Any
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _require_background_bins(n_bkg_bins: int, order: int) -> None:
+    """Reject a background fit that cannot constrain the polynomial."""
+    if n_bkg_bins < (order + 2):
+        raise RuntimeError(
+            f"Too few background bins ({n_bkg_bins}) "
+            f"for a polynomial of order {order}"
+        )
+
+
+def _log_localization_summary(result: dict[str, Any]) -> None:
+    """Log scalar localization coordinates without serializing the TS map."""
+    LOGGER.info(
+        "BGO localization completed: l=%.3f deg, b=%.3f deg",
+        float(result["l"]),
+        float(result["b"]),
+    )
 
 #########################################################
 # TASK 1: Preprocessing
@@ -455,15 +476,9 @@ def fit_background_gdt(
     Returns
     -------
     result : dict
-        Dizionario con:
-        - "model"           : oggetto Polynomial fittato
-        - "mask_bkg"        : maschera booleana dei bin usati nel fit
-        - "bkg_rate"        : background stimato in rate
-        - "bkg_rate_err"    : errore sul background rate
-        - "bkg_counts"      : background stimato in counts/bin
-        - "bkg_counts_err"  : errore in counts/bin
-        - "net_counts"      : observed counts - background counts
-        - "net_rate"        : rate osservato - background rate
+        Mapping containing the fitted ``Polynomial`` model, the background-fit
+        mask, estimated background rates and counts with their errors, and the
+        background-subtracted net counts and rates.
     """
     from gdt.core.background.binned import Polynomial
     
@@ -474,11 +489,7 @@ def fit_background_gdt(
     mask_bkg = (lc.hi_edges <= excl_start) | (lc.lo_edges >= excl_stop)
 
     n_bkg_bins = np.sum(mask_bkg)
-    if n_bkg_bins < (order + 2):
-        raise RuntimeError(
-            f"Troppi pochi bin di background ({n_bkg_bins}) "
-            f"per un polinomio di ordine {order}"
-        )
+    _require_background_bins(int(n_bkg_bins), order)
 
     # Match the bctools/GDT polynomial-background API shape: (N, 1) counts.
     bkg_model = Polynomial(
@@ -568,8 +579,6 @@ def background_extraction_and_data_preparation(
     signal_counts_arr = []
     background_counts_arr = []
     net_counts_arr = []
-
-    print(panels)
 
     lc_panels = {
         panel: TimeBins(
@@ -972,7 +981,7 @@ def localize_bctools(
         attitude=attitude,
         conf_level=0.9,
     )
-    print("[localize_grb] Localization result:", result)
+    _log_localization_summary(result)
     # Both figures represent the same localization result.  Only their displayed
     # TS range changes.
     best_loc = SkyCoord(
@@ -985,8 +994,6 @@ def localize_bctools(
         f"({best_loc.l.to(u.deg).value:.3f}, "
         f"{best_loc.b.to(u.deg).value:.3f})"
     )
-    print(f"[localize_grb] Best-fit localization (l, b): {best_fit_label}")
-
     localization_plots = (
         {
             "plot_kwargs": {"cont": 0.9},
