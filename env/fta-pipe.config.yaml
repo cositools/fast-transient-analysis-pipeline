@@ -1,8 +1,8 @@
 # fta-pipe.config.yaml
 # Configuration file for Fast Transient Analysis Pipeline module installation using 
 #    cosipy Python virtual environment
-# This file is stored in env/. hot_load_module.sh detects *.config.yaml files
-# both in the module root and in the module env/ directory.
+# Deprecated legacy compatibility manifest. New COSIflow versions select the
+# root Manifest.yaml and install its reviewed locks. Do not add new fields here.
 #
 # Usage examples:
 #   - Install with config: ./hot_load_module.sh <module> install

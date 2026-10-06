@@ -1,0 +1,52 @@
+schema_version: 1
+kind: cosiflow-module
+
+module:
+  id: fast-transient-analysis-pipeline
+  version: 1.0.0
+  ownership: native
+
+compatibility:
+  cosiflow_module_api: 1
+  platforms:
+    - linux/arm64
+  deployment_hosts:
+    - ubuntu/26.04
+
+install:
+  mode: environment
+  paths:
+    dags: src/dags
+    pipeline: src/pipeline
+    images: env
+
+environments:
+  cosipy:
+    python: "3.12"
+    direct_requirements: env/requirements_cosipy.in
+    lock: env/locks/cosipy-py312.lock
+    lock_sha256: aec6883bf8a6cd8540806ff8edba3156416d2a06def353578340c875465b73ac
+    enabled: true
+    description: "Pinned COSIpy environment for GeD/COSI analysis"
+  bct:
+    python: "3.11"
+    direct_requirements: env/requirements_bct.in
+    lock: env/locks/bct-py311.lock
+    lock_sha256: 3d23ec8c7eae3aa4566ced41347ae9fccd287c42c019e5e2dc8498bd83f5b537
+    enabled: true
+    description: "Pinned BCT/GDT environment for duration and localization"
+  nimcosipy:
+    python: "3.12"
+    direct_requirements: env/requirements_nimcosipy.in
+    lock: env/locks/nimcosipy-py312.lock
+    lock_sha256: ceba1376674d36dc6e61503fb43a1c020338384cafeae521cfbc29456d1d4558
+    enabled: true
+    description: "Pinned non-imaging environment for BGO localization"
+
+default_environment: cosipy
+
+validation:
+  pip_check: true
+  smoke_profile: fastp-v1
+  version_report: required
+  sbom: required

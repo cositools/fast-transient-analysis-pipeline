@@ -5,7 +5,16 @@
 # =============================================================================
 
 # FROM python:3.10-slim
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm@sha256:76d4b7b6305788c6b4c6a19d6a22a3921bf802e9af4d5e1e5bd771208dba74bf
+
+# Debian repositories are mutable even when the base image is pinned. Resolve
+# OS packages from one immutable snapshot for the 1.0.0 release candidate.
+ARG DEBIAN_SNAPSHOT=20261001T000000Z
+RUN sed -i \
+      -e "s|http://deb.debian.org/debian|https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}|g" \
+      -e "s|http://deb.debian.org/debian-security|https://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}|g" \
+      /etc/apt/sources.list.d/debian.sources \
+    && printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99snapshot
 
 # ------------------------------ System Dependencies ------------------------------
 # Install minimal libraries required for scientific packages (HDF5, GSL, compilers)
@@ -41,11 +50,12 @@ WORKDIR /home/gamma
 
 # --- Environment: cosipy (Stable) ---
 RUN python -m venv /home/gamma/envs/cosipy
-COPY --chown=gamma:gamma requirements_cosipy.txt /home/gamma/requirements_cosipy.txt
+COPY --chown=gamma:gamma locks/cosipy-py312.lock /home/gamma/cosipy-py312.lock
 # Activate env to install packages
 RUN . /home/gamma/envs/cosipy/bin/activate && \
-    python -m pip install --upgrade pip && \
-    pip install -r /home/gamma/requirements_cosipy.txt
+    python -m pip install --upgrade pip==26.1.2 setuptools==80.9.0 wheel==0.47.0 && \
+    pip install -r /home/gamma/cosipy-py312.lock && \
+    python -m pip check
 
 # ------------------------------ Default Configuration ------------------------------
 # Default to the stable environment

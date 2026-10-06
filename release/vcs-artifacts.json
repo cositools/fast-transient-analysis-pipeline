@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "module_version": "1.0.0",
+  "release_tag": "reproducibility-deps-v1.0.0",
+  "target": {
+    "platform": "linux/arm64",
+    "deployment_host": "ubuntu/26.04"
+  },
+  "packages": [
+    {
+      "distribution": "cosipy",
+      "python": "3.12",
+      "source": "git+https://github.com/cositools/cosipy.git",
+      "revision": "6d5dc69640eda81f475b053ce45424cabbe61a08"
+    },
+    {
+      "distribution": "astro-gdt",
+      "python": "3.11",
+      "source": "git+https://github.com/BurstCube/gdt-core.git",
+      "revision": "7ca78cc2166d30be02d575dbee063f86d8714f34"
+    },
+    {
+      "distribution": "bctools",
+      "python": "3.11",
+      "source": "git+https://gitlab.com/burstcube/bc-tools.git",
+      "revision": "c849285aca3dbc3788879d4c03a2d9852fca82b2"
+    },
+    {
+      "distribution": "cosipy.nonimaging",
+      "python": "3.12",
+      "source": "git+https://github.com/cositools/cosipy.nonimaging.git",
+      "revision": "3f62bcb03d60dbecfa01b05040bdbf413840ffe6"
+    }
+  ]
+}
