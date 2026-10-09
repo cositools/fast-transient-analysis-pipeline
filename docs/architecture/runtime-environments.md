@@ -19,7 +19,8 @@ The repository also contains a Python 3.12 Dockerfile that installs the COSIpy
 requirements. The loader builds it only for `container` or `both` installation
 modes, and none of the current FasTP DAG tasks launch that image.
 
-The environment split isolates incompatible scientific dependency trees. It is
-not a complete release lock: some application requirements still reference
-moving VCS branches, and the image base is not digest-pinned. Resolve that
-separately before claiming bit-for-bit application-runtime reproducibility.
+The environment split isolates incompatible scientific dependency trees. All
+VCS requirements use reviewed commit SHAs, but this is not a complete release
+lock: PyPI dependencies still use version ranges and the image base is not
+digest-pinned. Resolve those inputs separately before claiming bit-for-bit
+application-runtime reproducibility.
