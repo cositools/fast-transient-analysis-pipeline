@@ -22,5 +22,5 @@ PyMySQL>=1.1.1
 jupyter
 notebook
 
-# Legacy compatibility input. Manifest.yaml installs the complete lock instead.
--e git+https://github.com/cositools/cosipy.git@6d5dc69640eda81f475b053ce45424cabbe61a08#egg=cosipy
+# Pin to a commit SHA instead of develop once the validated revision is known.
+-e git+https://github.com/cositools/cosipy.git@develop#egg=cosipy

@@ -21,7 +21,7 @@ psutil
 py7zr
 
 # Core runtime packages.
-git+https://gitlab.com/burstcube/bc-tools.git@c849285aca3dbc3788879d4c03a2d9852fca82b2
+git+https://gitlab.com/burstcube/bc-tools.git@develop
 
 # Official cositools repository. The BGO localizer is currently provided by
 # pull request #2; pin its current commit to keep installs reproducible. This
