@@ -5,7 +5,7 @@ enables three managed Python environments:
 
 | Environment | Python | Requirements file | Current use |
 | --- | --- | --- | --- |
-| `cosipy` | 3.12 | `env/requirements_cosipy.txt` | staging, GeD background cut, GeD, ARM selection, BGO preprocessing/significance |
+| `cosipy` | 3.12 | `env/requirements_cosipy.txt` | staging, GeD background cut, GeD, BGO preprocessing/significance |
 | `bct` | 3.11 | `env/requirements_bct.txt` | BGO duration/background/light curves and GeD duration |
 | `nimcosipy` | 3.12 | `env/requirements_nimcosipy.txt` | BGO non-imaging localization |
 

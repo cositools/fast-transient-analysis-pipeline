@@ -146,9 +146,6 @@ def build_custom(dag):
             "pipeline_name": "GeD",
             "cosidag_id": "cosidag_GeD",
             "trigger_time": trigger_time,
-            # The unbinned prepared event product belongs to
-            # cosidag_ARMselection after the DAG split.
-            "prepare_event_data": False,
             "analysis_config": analysis_config,
             "input_resolved": {
                 "source_path": source_file,
@@ -332,8 +329,6 @@ def build_custom(dag):
     # ======================================================================
     # DAG-GeD (bottom row)
     # ======================================================================
-    # The unbinned ARM/localization track is defined in
-    # cosidag_ARMselection.py. This DAG owns only the binned COSIpy track.
     # Node 1. PreProcessing_GeD
     ged_pre_processing = ExternalPythonOperator(
         task_id="PreProcessing_GeD",

@@ -7,28 +7,26 @@ Open the Airflow web interface on the port selected during installation
 
 - `init_pipelines`;
 - `cosidag_BGO`;
-- `cosidag_GeD`;
-- `cosidag_ARMselection`.
+- `cosidag_GeD`.
 
 If they do not appear, use **Develop Tools → Refresh DAGs List** in COSIflow or
 run `docker compose exec airflow airflow dags list` from its Compose directory.
 
-## GeD and ARM-selection smoke run
+## GeD smoke run
 
 1. Pause `cosidag_BGO`.
-2. Unpause `cosidag_GeD`, `cosidag_ARMselection`, or both.
+2. Unpause `cosidag_GeD`.
 3. Trigger `init_pipelines` with `pipeline_branch=GeD` and
    `destination=tdrss`.
 4. Keep the four input paths at `__default__` for the configured DC4 example.
 5. Wait for `background_cut` and `initialization_complete`.
 
-The unpaused GeD-family COSIDAGs independently discover the resulting
-`products` directory. `cosidag_GeD` writes `pipeline_config.yaml` and
-`cosidag_ARMselection` writes `armsel_pipeline_config.yaml`.
+The unpaused `cosidag_GeD` discovers the resulting `products` directory and
+writes `pipeline_config.yaml`.
 
 ## BGO smoke run
 
-1. Pause `cosidag_GeD` and `cosidag_ARMselection`.
+1. Pause `cosidag_GeD`.
 2. Unpause `cosidag_BGO`.
 3. Trigger `init_pipelines` with `pipeline_branch=BGO`.
 4. Keep the five BGO paths at `__default__` for the configured run17 data.

@@ -12,7 +12,7 @@ discovers that directory according to its monitoring policy.
 | --- | --- | --- |
 | Orchestration | COSIflow | Airflow, COSIDAG folder monitoring, module loading |
 | Input staging | FasTP | Validate or download input selections, create product handoff |
-| Scientific analysis | FasTP | BGO, binned GeD, and ARM-selection task graphs |
+| Scientific analysis | FasTP | BGO and binned GeD task graphs |
 | Notice transport | COSIflow | GCN receiver, inbox database, outbox worker, Kafka client |
 | Notice mapping | FasTP | Query relevant notices and queue COSI alert payloads |
 

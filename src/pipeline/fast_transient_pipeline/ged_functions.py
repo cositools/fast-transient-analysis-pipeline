@@ -1,25 +1,9 @@
 from __future__ import annotations
 
 
-# Shared preprocessing defaults for the binned GeD and unbinned ARM-selection
-# branches. User-provided YAML values are deep-merged into this structure.
+# Preprocessing defaults for the binned GeD branch. User-provided YAML values
+# are deep-merged into this structure.
 GED_ANALYSIS_DEFAULTS: dict[str, Any] = {
-    "unbinned_light_curve": {
-        "arm-min": -15.0,
-        "arm-max": 15.0,
-        "bin": 1.0,
-        "out-prefix": "lc",
-        "arm-hist-bins": 30,
-        "format": "png",
-        "diagnostics": True,
-        "col-time": "TimeTags",
-        "col-l": "Chi galactic",
-        "col-b": "Psi galactic",
-        "col-phi": "Phi",
-        "plot_figsize": [8, 4],
-        "diagnostics_figsize": [14, 10],
-        "plot_dpi": 200,
-    },
     "default_spectrum": {
         "index": -2.2,
         "K": 10.0,
@@ -90,38 +74,6 @@ GED_ANALYSIS_DEFAULTS: dict[str, Any] = {
         "sentinel_value": -9999.0,
         "plot_figsize": [10, 4],
         "plot_dpi": 150,
-    },
-    "fast_localize": {
-        "off_pre": 20.0,
-        "off_gap": 5.0,
-        "off_fallback_strategy": "on_background",
-        "arm_min": -13.0,
-        "arm_max": 13.0,
-        "nside": 32,
-        "nsides": None,
-        "pix_chunk": 256,
-        "event_chunk": 200000,
-        "topk": 50,
-        "out_prefix": "grb",
-        "true_l_deg": None,
-        "true_b_deg": None,
-        "suppress_mmap_warning": True,
-        "make_lc": False,
-        "lc_bin": 1.0,
-        "lc_arm_min": None,
-        "lc_arm_max": None,
-        "lc_diagnostics": False,
-        "lc_script": "make_timeseries_all.py",
-        "col_time": "TimeTags",
-        "col_l": "Chi galactic",
-        "col_b": "Psi galactic",
-        "col_phi": "Phi",
-        "map_plot_figsize": [10, 6],
-        "map_plot_dpi": 220,
-        "nside_table_figsize_width": 14,
-        "nside_table_figsize_base_height": 2.4,
-        "nside_table_figsize_row_height": 0.38,
-        "nside_table_dpi": 240,
     },
 }
 
@@ -450,20 +402,6 @@ def preprocess_data(
     config["tstart"] = grb_tstart - eps_time
     config["tstop"] = grb_tstop + eps_time
     config["grb_duration"] = grb_duration
-    # The ARM-selection DAG requests this unbinned prepared product. The
-    # binned-only GeD DAG disables it so the two branches do not duplicate the
-    # expensive FITS preparation step.
-    if bool(config.get("prepare_event_data", True)):
-        try:
-            from .armsel_functions import _build_prepared_event_data
-        except ImportError:
-            from armsel_functions import _build_prepared_event_data
-
-        config["prepared_data"] = {
-            **dict(config.get("prepared_data", {})),
-            **_build_prepared_event_data(config),
-        }
-
     _ensure_structured_pipeline_config(config)
     preprocessing_task_id = str(
         config.get("preprocessing_task_id", "PreProcessing_GeD")

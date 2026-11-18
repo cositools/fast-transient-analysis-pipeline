@@ -3,7 +3,7 @@
 The Fast Transient Analysis Pipeline (FasTP) is a COSIflow module for rapid
 analysis of transient events observed by the
 [COSI mission](https://cosi.ssl.berkeley.edu/). It provides input staging and
-filesystem-driven BGO, binned GeD, and unbinned ARM-selection DAGs.
+filesystem-driven BGO and binned GeD DAGs.
 
 ## Quick start
 

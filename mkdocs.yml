@@ -41,7 +41,6 @@ nav:
   - Pipelines:
       - BGO: pipelines/bgo.md
       - GeD: pipelines/ged.md
-      - ARM selection: pipelines/arm-selection.md
   - Integration:
       - GCN: integration/gcn.md
   - Development:

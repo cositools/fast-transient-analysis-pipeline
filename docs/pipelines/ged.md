@@ -1,7 +1,6 @@
 # GeD branch
 
-`cosidag_GeD` owns the binned COSIpy likelihood branch. Unbinned event
-selection and localization are isolated in [ARM selection](arm-selection.md).
+`cosidag_GeD` owns the binned COSIpy likelihood branch.
 
 ## Inputs
 
@@ -23,9 +22,7 @@ products include:
 | Duration | `ged_bayesian_blocks_lightcurve_analysis.png`, `duration_results.yaml` |
 
 Binning filenames with time bounds are derived at runtime; consumers should
-read their recorded paths rather than construct them. This branch sets
-`prepare_event_data=False`, so it does not create the event HDF5 product used
-by ARM selection.
+read their recorded paths rather than construct them.
 
 `Spectral_Analysis` and `Classification_GeD` are `EmptyOperator` placeholders,
 not implemented scientific products. The exact graph and runtime split are in

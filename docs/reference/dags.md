@@ -7,9 +7,8 @@
 | `init_pipelines` | standard Airflow DAG | Airflow plus managed COSIpy commands | Resolve and stage GeD, BGO or both input families |
 | `cosidag_BGO` | COSIDAG | `cosipy`, `bct`, `nimcosipy`, Airflow | BGO transient analysis |
 | `cosidag_GeD` | COSIDAG | `cosipy`, `bct`, Airflow | Binned GeD analysis |
-| `cosidag_ARMselection` | COSIDAG | `cosipy`, Airflow | Unbinned ARM selection and localization |
 
-All four DAGs have no time schedule. The three scientific DAGs use COSIDAG
+All three DAGs have no time schedule. The two scientific DAGs use COSIDAG
 folder monitoring with `level=3`, `only_basename=products`, `idle_seconds=5`,
 `min_files=1`, `select_policy=latest_mtime`, and `auto_retrig=True`. They
 monitor `/home/gamma/workspace/data/tdrss` and maintain independent processed
@@ -73,17 +72,6 @@ PreProcessing_GeD
   -> Spectral_Analysis       (placeholder)
   -> Classification_GeD      (placeholder)
   -> GCN_GeD
-```
-
-## `cosidag_ARMselection`
-
-```text
-PreProcessing_ARMselection
-  -> Unbinned_Light_Curve_Generation
-  -> Light_Curve_Analysis
-  -> Skymap_unbinned
-  -> Duration_and_Localization_Results
-  -> GCN_ARMselection
 ```
 
 Exact input patterns and operator wiring remain authoritative in the

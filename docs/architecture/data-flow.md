@@ -16,16 +16,14 @@ background cut and always selects `tdrss`.
 
 ```text
 init_pipelines(GeD) -> tdrss/.../products
-                         |- cosidag_GeD -> pipeline_config.yaml
-                         `- cosidag_ARMselection -> armsel_pipeline_config.yaml
+                         `- cosidag_GeD -> pipeline_config.yaml
 
 init_pipelines(BGO) -> tdrss/.../products
                          `- cosidag_BGO -> pipeline_config.yaml
 ```
 
-The GeD and ARM-selection branches resolve the same input family but keep
-separate mutable YAML state. Large scientific products remain on disk; task
-XCom values carry configuration paths and compact result mappings.
+Large scientific products remain on disk; task XCom values carry
+configuration paths and compact result mappings.
 
 ## Other GeD destinations
 
